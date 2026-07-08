@@ -1,96 +1,106 @@
 import express from "express";
 import path from "path";
 import crypto from "crypto";
-import Database from "better-sqlite3";
+import { createClient, type Client } from "@libsql/client";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 import dotenv from "dotenv";
 import { SEED_DONORS } from "./src/donors_data";
 
 dotenv.config();
+// Render "Secret Files" : monté à /etc/secrets/<nom>, contient les identifiants Turso
+// quand le nombre de variables d'environnement classiques est limité sur le plan utilisé.
+// N'écrase jamais une variable déjà définie (dotenv ne remplace pas process.env existant).
+dotenv.config({ path: "/etc/secrets/turso.env" });
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 
 app.use(express.json());
 
-// ---------------- SQLite Database ----------------
-// DATA_DIR permet de monter un disque persistant (ex: /data sur Render payant).
-const DATA_DIR = process.env.DATA_DIR || process.cwd();
-const db = new Database(path.join(DATA_DIR, "eclosion.db"));
-db.pragma("journal_mode = WAL");
+// ---------------- Turso / SQLite Database ----------------
+// En production : TURSO_DATABASE_URL + TURSO_AUTH_TOKEN (données persistantes).
+// En développement local sans ces variables : repli sur un fichier SQLite local.
+const TURSO_URL = process.env.TURSO_DATABASE_URL;
+const TURSO_TOKEN = process.env.TURSO_AUTH_TOKEN;
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS users (
-    user_id TEXT PRIMARY KEY,
-    email TEXT UNIQUE NOT NULL,
-    name TEXT NOT NULL,
-    picture TEXT NOT NULL DEFAULT '',
-    group_id TEXT,
-    password_hash TEXT,
-    password_salt TEXT,
-    created_at TEXT NOT NULL
-  );
-  CREATE TABLE IF NOT EXISTS sessions (
-    token TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    created_at TEXT NOT NULL
-  );
-  CREATE TABLE IF NOT EXISTS groups (
-    group_id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    description TEXT NOT NULL DEFAULT '',
-    location TEXT NOT NULL DEFAULT '',
-    created_by TEXT NOT NULL,
-    created_at TEXT NOT NULL
-  );
-  CREATE TABLE IF NOT EXISTS group_members (
-    group_id TEXT NOT NULL,
-    user_id TEXT NOT NULL,
-    PRIMARY KEY (group_id, user_id)
-  );
-  CREATE TABLE IF NOT EXISTS group_messages (
-    message_id TEXT PRIMARY KEY,
-    group_id TEXT NOT NULL,
-    user_id TEXT NOT NULL,
-    user_name TEXT NOT NULL,
-    content TEXT NOT NULL,
-    created_at TEXT NOT NULL
-  );
-  CREATE TABLE IF NOT EXISTS donor_ratings (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    donor_id TEXT NOT NULL,
-    user_name TEXT NOT NULL,
-    stars INTEGER NOT NULL,
-    outcome TEXT NOT NULL DEFAULT '',
-    comment TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL
-  );
-  CREATE TABLE IF NOT EXISTS funding_requests (
-    request_id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    group_id TEXT,
-    project_name TEXT NOT NULL DEFAULT '',
-    sector TEXT NOT NULL DEFAULT '',
-    problem TEXT NOT NULL DEFAULT '',
-    solution TEXT NOT NULL DEFAULT '',
-    target_amount TEXT NOT NULL DEFAULT '',
-    beneficiaries TEXT NOT NULL DEFAULT '',
-    pitch TEXT NOT NULL DEFAULT '',
-    ai_generated INTEGER NOT NULL DEFAULT 0,
-    status TEXT NOT NULL DEFAULT 'Soumis',
-    created_at TEXT NOT NULL
-  );
-  CREATE TABLE IF NOT EXISTS tester_feedbacks (
-    feedback_id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    email TEXT NOT NULL DEFAULT '',
-    rating INTEGER NOT NULL DEFAULT 5,
-    comment TEXT NOT NULL DEFAULT '',
-    role TEXT NOT NULL DEFAULT 'Bêta-testeuse',
-    created_at TEXT NOT NULL
-  );
-`);
+const db: Client = TURSO_URL
+  ? createClient({ url: TURSO_URL, authToken: TURSO_TOKEN, intMode: "number" })
+  : createClient({ url: `file:${path.join(process.env.DATA_DIR || process.cwd(), "eclosion.db")}`, intMode: "number" });
+
+async function initSchema() {
+  await db.executeMultiple(`
+    CREATE TABLE IF NOT EXISTS users (
+      user_id TEXT PRIMARY KEY,
+      email TEXT UNIQUE NOT NULL,
+      name TEXT NOT NULL,
+      picture TEXT NOT NULL DEFAULT '',
+      group_id TEXT,
+      password_hash TEXT,
+      password_salt TEXT,
+      created_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS sessions (
+      token TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS groups (
+      group_id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      location TEXT NOT NULL DEFAULT '',
+      created_by TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS group_members (
+      group_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      PRIMARY KEY (group_id, user_id)
+    );
+    CREATE TABLE IF NOT EXISTS group_messages (
+      message_id TEXT PRIMARY KEY,
+      group_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      user_name TEXT NOT NULL,
+      content TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS donor_ratings (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      donor_id TEXT NOT NULL,
+      user_name TEXT NOT NULL,
+      stars INTEGER NOT NULL,
+      outcome TEXT NOT NULL DEFAULT '',
+      comment TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS funding_requests (
+      request_id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      group_id TEXT,
+      project_name TEXT NOT NULL DEFAULT '',
+      sector TEXT NOT NULL DEFAULT '',
+      problem TEXT NOT NULL DEFAULT '',
+      solution TEXT NOT NULL DEFAULT '',
+      target_amount TEXT NOT NULL DEFAULT '',
+      beneficiaries TEXT NOT NULL DEFAULT '',
+      pitch TEXT NOT NULL DEFAULT '',
+      ai_generated INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'Soumis',
+      created_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS tester_feedbacks (
+      feedback_id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      email TEXT NOT NULL DEFAULT '',
+      rating INTEGER NOT NULL DEFAULT 5,
+      comment TEXT NOT NULL DEFAULT '',
+      role TEXT NOT NULL DEFAULT 'Bêta-testeuse',
+      created_at TEXT NOT NULL
+    );
+  `);
+}
 
 // ---------------- Helpers ----------------
 const now = () => new Date().toISOString();
@@ -122,96 +132,113 @@ function normalizeEmail(raw: string): string {
   return email.includes("@") ? email : `${email}@eclosion.local`;
 }
 
-function createSession(userId: string): string {
+async function createSession(userId: string): Promise<string> {
   const token = crypto.randomBytes(32).toString("hex");
-  db.prepare("INSERT INTO sessions (token, user_id, created_at) VALUES (?, ?, ?)").run(token, userId, now());
+  await db.execute({
+    sql: "INSERT INTO sessions (token, user_id, created_at) VALUES (?, ?, ?)",
+    args: [token, userId, now()]
+  });
   return token;
 }
 
-function groupWithMembers(groupRow: any) {
+async function groupWithMembers(groupRow: any) {
   if (!groupRow) return null;
-  const members = db
-    .prepare("SELECT user_id FROM group_members WHERE group_id = ?")
-    .all(groupRow.group_id)
-    .map((r: any) => r.user_id);
+  const result = await db.execute({
+    sql: "SELECT user_id FROM group_members WHERE group_id = ?",
+    args: [groupRow.group_id]
+  });
+  const members = result.rows.map((r: any) => r.user_id);
   return { ...groupRow, members };
 }
 
 // ---------------- Seed initial data (première exécution uniquement) ----------------
-function seedIfEmpty() {
-  const count = (db.prepare("SELECT COUNT(*) AS c FROM users").get() as any).c;
+async function seedIfEmpty() {
+  const countResult = await db.execute("SELECT COUNT(*) AS c FROM users");
+  const count = Number((countResult.rows[0] as any).c);
   if (count > 0) return;
 
   const t = now();
   const demoSalt = crypto.randomBytes(16).toString("hex");
-  db.prepare(
-    "INSERT INTO users (user_id, email, name, picture, group_id, password_hash, password_salt, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
-  ).run("user_demo_1", "demo@eclosion.local", "Mireille Démo", "", "grp_demo_1", hashPassword("eclosion-demo", demoSalt), demoSalt, t);
+  await db.execute({
+    sql: "INSERT INTO users (user_id, email, name, picture, group_id, password_hash, password_salt, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    args: ["user_demo_1", "demo@eclosion.local", "Mireille Démo", "", "grp_demo_1", hashPassword("eclosion-demo", demoSalt), demoSalt, t]
+  });
 
-  const insertGroup = db.prepare(
-    "INSERT INTO groups (group_id, name, description, location, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)"
-  );
-  insertGroup.run(
-    "grp_demo_1",
-    "Coopérative des Femmes de Bafia",
-    "12 femmes courageuses spécialisées dans la production, transformation et ensachage de farine de manioc pure.",
-    "Bafia, Cameroun",
-    "user_demo_1",
-    t
-  );
-  insertGroup.run(
-    "grp_demo_2",
-    "Association des Artisanes de Pointe-Noire",
-    "Atelier collectif de couture, broderie et de teinture de pagnes traditionnels gabonais et congolais.",
-    "Pointe-Noire, Congo",
-    "system",
-    t
-  );
-  db.prepare("INSERT INTO group_members (group_id, user_id) VALUES (?, ?)").run("grp_demo_1", "user_demo_1");
+  await db.execute({
+    sql: "INSERT INTO groups (group_id, name, description, location, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+    args: [
+      "grp_demo_1",
+      "Coopérative des Femmes de Bafia",
+      "12 femmes courageuses spécialisées dans la production, transformation et ensachage de farine de manioc pure.",
+      "Bafia, Cameroun",
+      "user_demo_1",
+      t
+    ]
+  });
+  await db.execute({
+    sql: "INSERT INTO groups (group_id, name, description, location, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+    args: [
+      "grp_demo_2",
+      "Association des Artisanes de Pointe-Noire",
+      "Atelier collectif de couture, broderie et de teinture de pagnes traditionnels gabonais et congolais.",
+      "Pointe-Noire, Congo",
+      "system",
+      t
+    ]
+  });
+  await db.execute({
+    sql: "INSERT INTO group_members (group_id, user_id) VALUES (?, ?)",
+    args: ["grp_demo_1", "user_demo_1"]
+  });
 
-  db.prepare(
-    "INSERT INTO group_messages (message_id, group_id, user_id, user_name, content, created_at) VALUES (?, ?, ?, ?, ?, ?)"
-  ).run(
-    "msg_1",
-    "grp_demo_1",
-    "system",
-    "Éclosion Assistance",
-    "Bienvenue dans le salon de discussion de votre coopérative ! Échangez ici avec vos membres pour planifier vos activités et coordonner la transformation.",
-    t
-  );
+  await db.execute({
+    sql: "INSERT INTO group_messages (message_id, group_id, user_id, user_name, content, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+    args: [
+      "msg_1",
+      "grp_demo_1",
+      "system",
+      "Éclosion Assistance",
+      "Bienvenue dans le salon de discussion de votre coopérative ! Échangez ici avec vos membres pour planifier vos activités et coordonner la transformation.",
+      t
+    ]
+  });
 
-  const insertRating = db.prepare(
-    "INSERT INTO donor_ratings (donor_id, user_name, stars, outcome, comment, created_at) VALUES (?, ?, ?, ?, ?, ?)"
-  );
-  insertRating.run(
-    "d_cm_02",
-    "Aïcha (Bafia)",
-    5,
-    "funded",
-    "Le programme ACEFA a entièrement financé notre presse à manioc mécanique ! L'accompagnement sur le terrain était formidable.",
-    t
-  );
-  insertRating.run(
-    "d_cm_02",
-    "Marie-Louise",
-    4,
-    "responded",
-    "Dossier exigeant mais le comité d'évaluation étudie sérieusement chaque proposition rurale.",
-    t
-  );
+  await db.execute({
+    sql: "INSERT INTO donor_ratings (donor_id, user_name, stars, outcome, comment, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+    args: [
+      "d_cm_02",
+      "Aïcha (Bafia)",
+      5,
+      "funded",
+      "Le programme ACEFA a entièrement financé notre presse à manioc mécanique ! L'accompagnement sur le terrain était formidable.",
+      t
+    ]
+  });
+  await db.execute({
+    sql: "INSERT INTO donor_ratings (donor_id, user_name, stars, outcome, comment, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+    args: [
+      "d_cm_02",
+      "Marie-Louise",
+      4,
+      "responded",
+      "Dossier exigeant mais le comité d'évaluation étudie sérieusement chaque proposition rurale.",
+      t
+    ]
+  });
 }
-seedIfEmpty();
 
 // ---------------- Authentication middleware ----------------
-function requireAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
+async function requireAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
   const authHeader = req.headers.authorization || "";
   const token = authHeader.replace("Bearer ", "").trim();
   if (!token) {
     return res.status(401).json({ error: "Non authentifiée. Veuillez vous connecter." });
   }
-  const userRow = db
-    .prepare("SELECT u.* FROM sessions s JOIN users u ON u.user_id = s.user_id WHERE s.token = ?")
-    .get(token);
+  const result = await db.execute({
+    sql: "SELECT u.* FROM sessions s JOIN users u ON u.user_id = s.user_id WHERE s.token = ?",
+    args: [token]
+  });
+  const userRow = result.rows[0];
   if (!userRow) {
     return res.status(401).json({ error: "Session expirée. Veuillez vous reconnecter." });
   }
@@ -251,7 +278,7 @@ app.get("/api/config", (req, res) => {
 
 // Inscription OU connexion : si l'email existe, le mot de passe doit correspondre ;
 // sinon le compte est créé avec ce mot de passe.
-app.post("/api/auth/session", (req, res) => {
+app.post("/api/auth/session", async (req, res) => {
   const { name, email, password } = req.body || {};
   const cleanEmail = normalizeEmail(email);
   const cleanName = String(name || "").trim();
@@ -264,7 +291,8 @@ app.post("/api/auth/session", (req, res) => {
     return res.status(400).json({ error: "Le mot de passe doit contenir au moins 4 caractères." });
   }
 
-  let userRow: any = db.prepare("SELECT * FROM users WHERE email = ?").get(cleanEmail);
+  const existing = await db.execute({ sql: "SELECT * FROM users WHERE email = ?", args: [cleanEmail] });
+  let userRow: any = existing.rows[0];
 
   if (userRow) {
     // Compte existant : vérification du mot de passe
@@ -287,12 +315,13 @@ app.post("/api/auth/session", (req, res) => {
       password_salt: salt,
       created_at: now()
     };
-    db.prepare(
-      "INSERT INTO users (user_id, email, name, picture, group_id, password_hash, password_salt, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
-    ).run(userRow.user_id, userRow.email, userRow.name, userRow.picture, userRow.group_id, userRow.password_hash, userRow.password_salt, userRow.created_at);
+    await db.execute({
+      sql: "INSERT INTO users (user_id, email, name, picture, group_id, password_hash, password_salt, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      args: [userRow.user_id, userRow.email, userRow.name, userRow.picture, userRow.group_id, userRow.password_hash, userRow.password_salt, userRow.created_at]
+    });
   }
 
-  const token = createSession(userRow.user_id);
+  const token = await createSession(userRow.user_id);
   res.json({ session_token: token, user: toPublicUser(userRow) });
 });
 
@@ -302,24 +331,25 @@ app.get("/api/auth/me", requireAuth, (req, res) => {
 });
 
 // Déconnexion : invalide la session côté serveur
-app.post("/api/auth/logout", requireAuth, (req, res) => {
+app.post("/api/auth/logout", requireAuth, async (req, res) => {
   const token = (req.headers.authorization || "").replace("Bearer ", "").trim();
-  db.prepare("DELETE FROM sessions WHERE token = ?").run(token);
+  await db.execute({ sql: "DELETE FROM sessions WHERE token = ?", args: [token] });
   res.json({ success: true });
 });
 
 // Accès rapide au compte d'évaluation partagé
-app.post("/api/auth/demo-login", (req, res) => {
-  const demoUser: any = db.prepare("SELECT * FROM users WHERE email = ?").get("demo@eclosion.local");
+app.post("/api/auth/demo-login", async (req, res) => {
+  const result = await db.execute({ sql: "SELECT * FROM users WHERE email = ?", args: ["demo@eclosion.local"] });
+  const demoUser: any = result.rows[0];
   if (!demoUser) {
     return res.status(500).json({ error: "Compte de démonstration introuvable." });
   }
-  const token = createSession(demoUser.user_id);
+  const token = await createSession(demoUser.user_id);
   res.json({ session_token: token, user: toPublicUser(demoUser) });
 });
 
 // Group creation
-app.post("/api/groups", requireAuth, (req, res) => {
+app.post("/api/groups", requireAuth, async (req, res) => {
   const user = (req as any).user;
   const { name, description, location } = req.body || {};
   if (!name || !String(name).trim()) {
@@ -328,85 +358,89 @@ app.post("/api/groups", requireAuth, (req, res) => {
 
   const group_id = genId("grp");
   const createdAt = now();
-  db.prepare(
-    "INSERT INTO groups (group_id, name, description, location, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)"
-  ).run(group_id, String(name).trim(), String(description || ""), String(location || ""), user.user_id, createdAt);
-  db.prepare("INSERT INTO group_members (group_id, user_id) VALUES (?, ?)").run(group_id, user.user_id);
-  db.prepare("UPDATE users SET group_id = ? WHERE user_id = ?").run(group_id, user.user_id);
+  await db.execute({
+    sql: "INSERT INTO groups (group_id, name, description, location, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+    args: [group_id, String(name).trim(), String(description || ""), String(location || ""), user.user_id, createdAt]
+  });
+  await db.execute({ sql: "INSERT INTO group_members (group_id, user_id) VALUES (?, ?)", args: [group_id, user.user_id] });
+  await db.execute({ sql: "UPDATE users SET group_id = ? WHERE user_id = ?", args: [group_id, user.user_id] });
 
-  const group = db.prepare("SELECT * FROM groups WHERE group_id = ?").get(group_id);
-  res.json(groupWithMembers(group));
+  const groupResult = await db.execute({ sql: "SELECT * FROM groups WHERE group_id = ?", args: [group_id] });
+  res.json(await groupWithMembers(groupResult.rows[0]));
 });
 
 // List Groups
-app.get("/api/groups", (req, res) => {
-  const groups = db.prepare("SELECT * FROM groups ORDER BY created_at ASC").all();
-  res.json(groups.map(groupWithMembers));
+app.get("/api/groups", async (req, res) => {
+  const result = await db.execute("SELECT * FROM groups ORDER BY created_at ASC");
+  const groups = await Promise.all(result.rows.map(g => groupWithMembers(g)));
+  res.json(groups);
 });
 
 // Join group
-app.post("/api/groups/:group_id/join", requireAuth, (req, res) => {
+app.post("/api/groups/:group_id/join", requireAuth, async (req, res) => {
   const user = (req as any).user;
   const { group_id } = req.params;
 
-  const group = db.prepare("SELECT * FROM groups WHERE group_id = ?").get(group_id);
+  const groupResult = await db.execute({ sql: "SELECT * FROM groups WHERE group_id = ?", args: [group_id] });
+  const group = groupResult.rows[0];
   if (!group) {
     return res.status(404).json({ error: "Groupe introuvable" });
   }
 
-  db.prepare("INSERT OR IGNORE INTO group_members (group_id, user_id) VALUES (?, ?)").run(group_id, user.user_id);
-  db.prepare("UPDATE users SET group_id = ? WHERE user_id = ?").run(group_id, user.user_id);
+  await db.execute({ sql: "INSERT OR IGNORE INTO group_members (group_id, user_id) VALUES (?, ?)", args: [group_id, user.user_id] });
+  await db.execute({ sql: "UPDATE users SET group_id = ? WHERE user_id = ?", args: [group_id, user.user_id] });
 
-  res.json(groupWithMembers(group));
+  res.json(await groupWithMembers(group));
 });
 
 // Leave group
-app.post("/api/groups/:group_id/leave", requireAuth, (req, res) => {
+app.post("/api/groups/:group_id/leave", requireAuth, async (req, res) => {
   const user = (req as any).user;
   const { group_id } = req.params;
 
-  db.prepare("DELETE FROM group_members WHERE group_id = ? AND user_id = ?").run(group_id, user.user_id);
-  db.prepare("UPDATE users SET group_id = NULL WHERE user_id = ?").run(user.user_id);
+  await db.execute({ sql: "DELETE FROM group_members WHERE group_id = ? AND user_id = ?", args: [group_id, user.user_id] });
+  await db.execute({ sql: "UPDATE users SET group_id = NULL WHERE user_id = ?", args: [user.user_id] });
 
   res.json({ success: true });
 });
 
 // Get authenticated user's group with member profiles
-app.get("/api/groups/mine", requireAuth, (req, res) => {
+app.get("/api/groups/mine", requireAuth, async (req, res) => {
   const user = (req as any).user;
 
   if (!user.group_id) {
     return res.json({ group: null, members_info: [] });
   }
 
-  const group = db.prepare("SELECT * FROM groups WHERE group_id = ?").get(user.group_id);
+  const groupResult = await db.execute({ sql: "SELECT * FROM groups WHERE group_id = ?", args: [user.group_id] });
+  const group = groupResult.rows[0];
   if (!group) {
     return res.json({ group: null, members_info: [] });
   }
 
-  const members_info = db
-    .prepare(
-      "SELECT u.user_id, u.email, u.name, u.picture, u.group_id FROM group_members gm JOIN users u ON u.user_id = gm.user_id WHERE gm.group_id = ?"
-    )
-    .all(user.group_id);
+  const membersResult = await db.execute({
+    sql: "SELECT u.user_id, u.email, u.name, u.picture, u.group_id FROM group_members gm JOIN users u ON u.user_id = gm.user_id WHERE gm.group_id = ?",
+    args: [user.group_id]
+  });
 
-  res.json({ group: groupWithMembers(group), members_info });
+  res.json({ group: await groupWithMembers(group), members_info: membersResult.rows });
 });
 
 // Group messages list (restreint au groupe de l'utilisatrice connectée)
-app.get("/api/groups/mine/messages", requireAuth, (req, res) => {
+app.get("/api/groups/mine/messages", requireAuth, async (req, res) => {
   const user = (req as any).user;
   if (!user.group_id) {
     return res.json([]);
   }
-  const messages = db
-    .prepare("SELECT * FROM group_messages WHERE group_id = ? ORDER BY created_at ASC")
-    .all(user.group_id);
-  res.json(messages);
+  const result = await db.execute({
+    sql: "SELECT * FROM group_messages WHERE group_id = ? ORDER BY created_at ASC",
+    args: [user.group_id]
+  });
+  res.json(result.rows);
 });
 
 // Create group message
-app.post("/api/groups/mine/messages", requireAuth, (req, res) => {
+app.post("/api/groups/mine/messages", requireAuth, async (req, res) => {
   const user = (req as any).user;
   const { content } = req.body || {};
 
@@ -425,45 +459,48 @@ app.post("/api/groups/mine/messages", requireAuth, (req, res) => {
     content: String(content).trim(),
     created_at: now()
   };
-  db.prepare(
-    "INSERT INTO group_messages (message_id, group_id, user_id, user_name, content, created_at) VALUES (?, ?, ?, ?, ?, ?)"
-  ).run(newMessage.message_id, newMessage.group_id, newMessage.user_id, newMessage.user_name, newMessage.content, newMessage.created_at);
+  await db.execute({
+    sql: "INSERT INTO group_messages (message_id, group_id, user_id, user_name, content, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+    args: [newMessage.message_id, newMessage.group_id, newMessage.user_id, newMessage.user_name, newMessage.content, newMessage.created_at]
+  });
 
   res.json(newMessage);
 });
 
 // List all donors with their calculated stats
-app.get("/api/donors", (req, res) => {
-  const stats = db
-    .prepare("SELECT donor_id, COUNT(*) AS rating_count, AVG(stars) AS avg_rating FROM donor_ratings GROUP BY donor_id")
-    .all() as any[];
-  const statsById = new Map(stats.map(s => [s.donor_id, s]));
+app.get("/api/donors", async (req, res) => {
+  const statsResult = await db.execute(
+    "SELECT donor_id, COUNT(*) AS rating_count, AVG(stars) AS avg_rating FROM donor_ratings GROUP BY donor_id"
+  );
+  const statsById = new Map(statsResult.rows.map((s: any) => [s.donor_id, s]));
 
   const enriched = SEED_DONORS.map(d => {
-    const s = statsById.get(d.donor_id);
+    const s: any = statsById.get(d.donor_id);
     return {
       ...d,
       avg_rating: s ? Number(Number(s.avg_rating).toFixed(1)) : 0,
-      rating_count: s ? s.rating_count : 0
+      rating_count: s ? Number(s.rating_count) : 0
     };
   });
   res.json(enriched);
 });
 
 // Donors ratings / reviews
-app.get("/api/donors/:donor_id/reviews", (req, res) => {
+app.get("/api/donors/:donor_id/reviews", async (req, res) => {
   const { donor_id } = req.params;
-  const reviews = db
-    .prepare("SELECT user_name, stars, outcome, comment, created_at FROM donor_ratings WHERE donor_id = ? ORDER BY created_at DESC")
-    .all(donor_id) as any[];
-  const totalStars = reviews.reduce((sum, r) => sum + r.stars, 0);
+  const result = await db.execute({
+    sql: "SELECT user_name, stars, outcome, comment, created_at FROM donor_ratings WHERE donor_id = ? ORDER BY created_at DESC",
+    args: [donor_id]
+  });
+  const reviews = result.rows as any[];
+  const totalStars = reviews.reduce((sum, r) => sum + Number(r.stars), 0);
   const avg = reviews.length > 0 ? Number((totalStars / reviews.length).toFixed(1)) : 0;
 
   res.json({ reviews, avg, count: reviews.length });
 });
 
 // Post review/rate donor (signé du nom de l'utilisatrice connectée)
-app.post("/api/donors/:donor_id/rate", requireAuth, (req, res) => {
+app.post("/api/donors/:donor_id/rate", requireAuth, async (req, res) => {
   const user = (req as any).user;
   const { donor_id } = req.params;
   const { stars, outcome, comment } = req.body || {};
@@ -481,20 +518,22 @@ app.post("/api/donors/:donor_id/rate", requireAuth, (req, res) => {
     comment: String(comment || ""),
     created_at: now()
   };
-  db.prepare(
-    "INSERT INTO donor_ratings (donor_id, user_name, stars, outcome, comment, created_at) VALUES (?, ?, ?, ?, ?, ?)"
-  ).run(newRating.donor_id, newRating.user_name, newRating.stars, newRating.outcome, newRating.comment, newRating.created_at);
+  await db.execute({
+    sql: "INSERT INTO donor_ratings (donor_id, user_name, stars, outcome, comment, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+    args: [newRating.donor_id, newRating.user_name, newRating.stars, newRating.outcome, newRating.comment, newRating.created_at]
+  });
 
   res.json({ success: true, rating: newRating });
 });
 
 // Get My Funding Requests
-app.get("/api/funding/mine", requireAuth, (req, res) => {
+app.get("/api/funding/mine", requireAuth, async (req, res) => {
   const user = (req as any).user;
-  const requests = db
-    .prepare("SELECT * FROM funding_requests WHERE user_id = ? ORDER BY created_at DESC")
-    .all(user.user_id) as any[];
-  res.json(requests.map(r => ({ ...r, ai_generated: Boolean(r.ai_generated) })));
+  const result = await db.execute({
+    sql: "SELECT * FROM funding_requests WHERE user_id = ? ORDER BY created_at DESC",
+    args: [user.user_id]
+  });
+  res.json(result.rows.map((r: any) => ({ ...r, ai_generated: Boolean(r.ai_generated) })));
 });
 
 // Generate pitch via Gemini AI!
@@ -595,29 +634,30 @@ Notre groupe est fondé sur des valeurs de solidarité indéfectibles, de travai
     status: "Soumis",
     created_at: now()
   };
-  db.prepare(
-    "INSERT INTO funding_requests (request_id, user_id, group_id, project_name, sector, problem, solution, target_amount, beneficiaries, pitch, ai_generated, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-  ).run(
-    newRequest.request_id,
-    newRequest.user_id,
-    newRequest.group_id,
-    newRequest.project_name,
-    newRequest.sector,
-    newRequest.problem,
-    newRequest.solution,
-    newRequest.target_amount,
-    newRequest.beneficiaries,
-    newRequest.pitch,
-    aiGenerated ? 1 : 0,
-    newRequest.status,
-    newRequest.created_at
-  );
+  await db.execute({
+    sql: "INSERT INTO funding_requests (request_id, user_id, group_id, project_name, sector, problem, solution, target_amount, beneficiaries, pitch, ai_generated, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    args: [
+      newRequest.request_id,
+      newRequest.user_id,
+      newRequest.group_id,
+      newRequest.project_name,
+      newRequest.sector,
+      newRequest.problem,
+      newRequest.solution,
+      newRequest.target_amount,
+      newRequest.beneficiaries,
+      newRequest.pitch,
+      aiGenerated ? 1 : 0,
+      newRequest.status,
+      newRequest.created_at
+    ]
+  });
 
   res.json(newRequest);
 });
 
 // Submit tester feedback
-app.post("/api/tester-feedback", requireAuth, (req, res) => {
+app.post("/api/tester-feedback", requireAuth, async (req, res) => {
   const { name, email, rating, comment, role } = req.body || {};
 
   const newFeedback = {
@@ -633,23 +673,27 @@ app.post("/api/tester-feedback", requireAuth, (req, res) => {
     return res.status(400).json({ error: "Le nom et le commentaire sont obligatoires." });
   }
 
-  db.prepare(
-    "INSERT INTO tester_feedbacks (feedback_id, name, email, rating, comment, role, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
-  ).run(newFeedback.feedback_id, newFeedback.name, newFeedback.email, newFeedback.rating, newFeedback.comment, newFeedback.role, newFeedback.created_at);
+  await db.execute({
+    sql: "INSERT INTO tester_feedbacks (feedback_id, name, email, rating, comment, role, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    args: [newFeedback.feedback_id, newFeedback.name, newFeedback.email, newFeedback.rating, newFeedback.comment, newFeedback.role, newFeedback.created_at]
+  });
 
   res.json({ success: true, feedback: newFeedback });
 });
 
 // List tester feedback (réservé aux utilisatrices connectées)
-app.get("/api/tester-feedback", requireAuth, (req, res) => {
-  const feedbacks = db.prepare("SELECT * FROM tester_feedbacks ORDER BY created_at DESC").all();
-  res.json(feedbacks);
+app.get("/api/tester-feedback", requireAuth, async (req, res) => {
+  const result = await db.execute("SELECT * FROM tester_feedbacks ORDER BY created_at DESC");
+  res.json(result.rows);
 });
 
 
 // ---------------- Vite Middleware & Ingress ----------------
 
 const startServer = async () => {
+  await initSchema();
+  await seedIfEmpty();
+
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
       server: { middlewareMode: true },
