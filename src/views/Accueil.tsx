@@ -61,10 +61,13 @@ export default function Accueil({
       {/* Top Header */}
       <div className="flex items-center justify-between px-6 py-4 bg-white border-b border-surface-ter select-none">
         <div className="flex-1 min-w-0 pr-2">
-          <span className="text-[11px] font-semibold text-text-ter tracking-wider block">
-            Bonjour
-          </span>
-          <h2 className="text-xl font-bold text-text-main leading-tight truncate">
+          <div className="flex items-center gap-1.5">
+            <span className="text-[10px] font-semibold text-[#7B3FF2] tracking-wider block uppercase">
+              Réseau AFEP-3.0
+            </span>
+            <span className="text-[9px] px-1 bg-[#132B63]/10 text-[#132B63] font-bold rounded">OFFICIEL</span>
+          </div>
+          <h2 className="text-xl font-bold text-[#132B63] leading-tight truncate">
             {user.name.split(" ")[0] || "Bienvenue"}
           </h2>
         </div>

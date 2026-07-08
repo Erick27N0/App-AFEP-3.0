@@ -4,7 +4,7 @@ import fs from "fs";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 import dotenv from "dotenv";
-import { SEED_DONORS } from "./src/data";
+import { SEED_DONORS } from "./src/donors_data";
 
 dotenv.config();
 
@@ -393,8 +393,9 @@ app.get("/api/funding/mine", (req, res) => {
 app.post("/api/funding/generate", async (req, res) => {
   const { project_name, sector, problem, solution, target_amount, beneficiaries, userId } = req.body;
   
-  const prompt = `Rédige un pitch de financement en français pour un projet porté par des femmes rurales d'Afrique Centrale.
+  const prompt = `Rédige un pitch de financement en français pour un projet porté par des femmes rurales d'Afrique Centrale, membres du réseau AFEP-3.0 (Association des Familles pour l'Éducation et le Progrès v3.0).
 Tu dois adopter un style clair, encourageant, réaliste et très professionnel pour convaincre des bailleurs de fonds (ONG, microfinance).
+Mentionne impérativement que ce projet collectif est soutenu et encadré par l'association AFEP-3.0, garantissant le suivi rigoureux et l'éthique de la coopérative.
 
 DÉTAILS DU PROJET :
 - Nom du projet : "${project_name}"
@@ -407,7 +408,7 @@ DÉTAILS DU PROJET :
 RÉDIGE LE PITCH EN UTILISANT EXACTEMENT CES SECTIONS EN MARKDOWN (Titre h2 "## ") :
 
 ## Résumé exécutif
-(Raconte l'histoire du projet de manière percutante, en mentionnant le nom, le secteur, la localisation et le montant en 3-4 phrases)
+(Raconte l'histoire du projet de manière percutante, en mentionnant le nom, le secteur, la localisation et le montant en 3-4 phrases, et précise qu'il s'inscrit au sein du réseau AFEP-3.0)
 
 ## Le problème
 (Mets en valeur la réalité locale difficile et les pertes subies par la communauté rurale)
@@ -422,7 +423,7 @@ RÉDIGE LE PITCH EN UTILISANT EXACTEMENT CES SECTIONS EN MARKDOWN (Titre h2 "## 
 (Indique une répartition logique du budget en pourcentages réalistes sous forme de liste à puces : équipement, fonds de roulement, formation)
 
 ## Pourquoi nous soutenir
-(Mets en valeur la force collective du groupe, la solidarité locale et la pérennité de l'activité commerciale)`;
+(Mets en valeur la force collective du groupe soutenue par AFEP-3.0, la solidarité locale et la pérennité de l'activité commerciale)`;
 
   let pitchText = "";
   let aiGenerated = false;
@@ -449,25 +450,25 @@ RÉDIGE LE PITCH EN UTILISANT EXACTEMENT CES SECTIONS EN MARKDOWN (Titre h2 "## 
   // Fallback if AI fails or if API key is not configured
   if (!pitchText) {
     pitchText = `## Résumé exécutif
-Le groupe maraîcher présente fièrement le projet **${project_name}** dans le secteur **${sector}**. Afin d'aider notre communauté à s'autonomiser, nous sollicitons respectueusement un financement d'un montant de **${target_amount}**.
+Le groupe maraîcher présente fièrement le projet **${project_name}** dans le secteur **${sector}**. Afin d'aider notre communauté à s'autonomiser sous l'égide de l'association **AFEP-3.0**, nous sollicitons respectueusement un financement d'un montant de **${target_amount}**.
 
 ## Le problème
 Actuellement, nos membres font face à un obstacle majeur : **${problem}**. Sans solution adaptée, ces difficultés limitent nos revenus et entraînent des pertes matérielles ou agricoles significatives pour de nombreuses familles du village.
 
 ## Notre solution
-Pour y remédier, notre coopérative va mettre en œuvre la solution suivante : **${solution}**. Ce projet nous permettra d'accroître de manière drastique notre capacité de production et de vente locale.
+Pour y remédier, notre coopérative va mettre en œuvre la solution suivante : **${solution}**. Ce projet, encadré techniquement par l'association **AFEP-3.0**, nous permettra d'accroître de manière drastique notre capacité de production et de vente locale.
 
 ## Bénéficiaires & impact
-Ce projet profitera directement à **${beneficiaries}**. Grâce à cette opportunité, les bénéficiaires augmenteront durablement leurs revenus autonomes, assurant une meilleure scolarité pour les enfants et une meilleure santé communautaire.
+Ce projet profitera directement à **${beneficiaries}**. Grâce à cette opportunité et à l'appui d'**AFEP-3.0**, les bénéficiaires augmenteront durablement leurs revenus autonomes, assurant une meilleure scolarité pour les enfants et une meilleure santé communautaire.
 
 ## Plan d'utilisation des fonds
 Après concertation avec tous les membres du groupe, nous prévoyons de répartir le budget de **${target_amount}** de la façon suivante :
 * **Achat d'équipements productifs solides** (60%) : Financement des machines et outils principaux.
 * **Fonds de roulement initial** (25%) : Acquisition de matières premières et emballages de qualité pour démarrer.
-* **Formation pratique & sécurité** (15%) : Éducation collective des membres aux techniques d'exploitation et de gestion financière.
+* **Formation pratique & sécurité** (15%) : Éducation collective des membres aux techniques d'exploitation et de gestion financière animée par l'AFEP-3.0.
 
 ## Pourquoi nous soutenir
-Notre groupe est fondé sur des valeurs de solidarité indéfectibles, de travail partagé et d'ancrage local fort. En nous soutenant, vous investissez dans une coopérative pérenne capable de générer de l'impact social concret dès la première semaine.`;
+Notre groupe est fondé sur des valeurs de solidarité indéfectibles, de travail partagé et d'ancrage local fort, consolidé par le programme d'intégration d'**AFEP-3.0**. En nous soutenant, vous investissez dans une coopérative pérenne capable de générer de l'impact social concret dès la première semaine.`;
   }
 
   const dbState = readDb();

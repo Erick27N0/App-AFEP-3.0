@@ -102,9 +102,12 @@ export default function Dashboard({
         <button onClick={onBack} className="p-2 -ml-2 hover:bg-surface-sec rounded-full transition-all">
           <ArrowLeft size={20} className="text-text-main" />
         </button>
-        <div>
-          <h2 className="text-lg font-semibold text-text-main">Mon tableau de bord</h2>
-          <p className="text-xs text-text-ter">Vue synthétique de votre progression</p>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-1.5">
+            <h2 className="text-lg font-semibold text-text-main">Mon tableau de bord</h2>
+            <span className="text-[9px] px-1.5 py-0.5 bg-[#7B3FF2]/10 text-[#7B3FF2] font-mono font-bold rounded">AFEP-3.0</span>
+          </div>
+          <p className="text-xs text-text-ter">Suivi d'intégration sous l'égide de l'AFEP-3.0</p>
         </div>
       </div>
 

@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { LogIn, Zap, User, ArrowLeft, Send } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
+import welcomeBg from "../assets/images/welcome_bg_afep3_1783507778316.jpg";
 
 interface WelcomeProps {
   onLogin: (userName: string, email: string) => void;
@@ -49,10 +50,10 @@ export default function Welcome({ onLogin, onLoginDemo }: WelcomeProps) {
 
   return (
     <div className="relative w-full h-full flex flex-col justify-end min-h-[760px] text-white">
-      {/* Background Image */}
+      {/* Background Image showing AFEP-3.0 custom fabric */}
       <img
-        src="https://images.unsplash.com/photo-1741940365831-1a1fdc2e33ff?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2NDJ8MHwxfHNlYXJjaHwxfHxhZnJpY2FuJTIwcnVyYWwlMjB3b21lbiUyMGZhcm1pbmclMjBidXNpbmVzc3xlbnwwfHx8fDE3ODIzMDk3NTF8MA&ixlib=rb-4.1.0&q=85"
-        alt="African Rural Women working together"
+        src={welcomeBg}
+        alt="African Rural Women in AFEP-3.0 Pagne"
         className="absolute inset-0 w-full h-full object-cover object-center z-0"
         referrerPolicy="no-referrer"
       />
@@ -72,15 +73,20 @@ export default function Welcome({ onLogin, onLoginDemo }: WelcomeProps) {
               className="flex flex-col gap-4"
             >
               <div className="flex flex-col gap-1">
-                <span className="text-brand-secondary text-xs font-semibold tracking-wider block">
-                  Éclosion
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className="text-brand-secondary text-xs font-semibold tracking-wider block">
+                    Éclosion
+                  </span>
+                  <span className="text-white/40 text-[10px]">•</span>
+                  <span className="text-white/70 text-[10px] uppercase font-mono font-bold tracking-wider">
+                    Par AFEP-3.0
+                  </span>
+                </div>
                 <h1 className="text-3xl font-bold tracking-tight text-white leading-tight">
                   Ensemble, bâtissons l'avenir
                 </h1>
                 <p className="text-[#E6E1DC] text-sm leading-relaxed mt-2">
-                  Une plateforme d'autonomisation pour les groupes de femmes rurales d'Afrique Centrale.
-                  Connectez-vous, formez-vous et financez vos projets collectifs.
+                  La plateforme d'autonomisation propulsée par l'association <strong className="text-white">AFEP-3.0</strong> pour les groupes de femmes rurales d'Afrique Centrale. Connectez-vous, formez-vous et financez vos projets.
                 </p>
               </div>
 
