@@ -1,0 +1,64 @@
+@import "tailwindcss";
+
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap');
+
+@theme {
+  --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  
+  --color-brand-primary: #4A6B4E;
+  --color-brand-secondary: #D98A2C;
+  --color-brand-tertiary: #E8F0E8;
+  --color-on-brand-tertiary: #2E4231;
+  --color-brand-accent: #D98A2C;
+  
+  --color-surface-main: #FDFDFB;
+  --color-surface-sec: #F2EFEB;
+  --color-surface-ter: #E6E1DC;
+  --color-surface-inv: #2B332C;
+  --color-on-surface-inv: #FDFDFB;
+  
+  --color-text-main: #1A1D1A;
+  --color-text-sec: #3A403A;
+  --color-text-ter: #5C665C;
+  
+  --color-success-main: #3D734B;
+  --color-warning-main: #C27A27;
+  --color-error-main: #B34D40;
+  --color-info-main: #4A5D6B;
+
+  --radius-sm: 6px;
+  --radius-md: 12px;
+  --radius-lg: 20px;
+}
+
+body {
+  background-color: #F2EFEB;
+  color: var(--color-text-main);
+  font-family: var(--font-sans);
+}
+
+/* Custom rounded corners: 12px fixed as requested by Eclosion layout guidelines */
+.rounded-eclosion {
+  border-radius: 12px !important;
+}
+
+/* Make sure all default Tailwind standard components fall back safely to 12px rounded */
+.rounded-lg, .rounded-xl, .rounded-2xl {
+  border-radius: 12px !important;
+}
+
+/* Scrollbar styles */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(74, 107, 78, 0.1);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(74, 107, 78, 0.25);
+}

@@ -1,0 +1,6 @@
+{
+  "name": "Éclosion",
+  "description": "Plateforme d'autonomisation et de financement pour les groupes de femmes rurales d'Afrique Centrale.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
