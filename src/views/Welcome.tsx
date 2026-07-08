@@ -1,51 +1,39 @@
 import React, { useState } from "react";
-import { LogIn, Zap, User, ArrowLeft, Send } from "lucide-react";
+import { Zap, User, ArrowLeft, Send, KeyRound } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import welcomeBg from "../assets/images/welcome_bg_afep3_1783507778316.jpg";
 
 interface WelcomeProps {
-  onLogin: (userName: string, email: string) => void;
-  onLoginDemo: () => void;
+  onLogin: (userName: string, email: string, password: string) => Promise<boolean>;
+  onLoginDemo: () => Promise<void> | void;
 }
 
 export default function Welcome({ onLogin, onLoginDemo }: WelcomeProps) {
-  const [loading, setLoading] = useState<"google" | "demo" | "custom" | null>(null);
+  const [loading, setLoading] = useState<"demo" | "custom" | null>(null);
   const [isRegistering, setIsRegistering] = useState(false);
-  
+
   // Registration Form States
   const [regForm, setRegForm] = useState({
     name: "",
     email: "",
+    password: "",
     village: "",
     country: "Cameroun"
   });
 
-  const handleGoogle = () => {
-    setLoading("google");
-    setTimeout(() => {
-      onLogin("Mireille Démo", "demo@eclosion.local");
-      setLoading(null);
-    }, 1200);
-  };
-
-  const handleDemo = () => {
+  const handleDemo = async () => {
     setLoading("demo");
-    setTimeout(() => {
-      onLoginDemo();
-      setLoading(null);
-    }, 800);
+    await onLoginDemo();
+    setLoading(null);
   };
 
-  const handleCustomRegister = (e: React.FormEvent) => {
+  const handleCustomRegister = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!regForm.name.trim() || !regForm.email.trim()) return;
+    if (!regForm.name.trim() || !regForm.email.trim() || regForm.password.length < 4) return;
     setLoading("custom");
-    setTimeout(() => {
-      const formattedEmail = regForm.email.includes("@") ? regForm.email : `${regForm.email}@eclosion.local`;
-      const displayName = `${regForm.name} (${regForm.village}, ${regForm.country})`;
-      onLogin(displayName, formattedEmail);
-      setLoading(null);
-    }, 1000);
+    const displayName = `${regForm.name} (${regForm.village}, ${regForm.country})`;
+    await onLogin(displayName, regForm.email, regForm.password);
+    setLoading(null);
   };
 
   return (
@@ -97,22 +85,7 @@ export default function Welcome({ onLogin, onLoginDemo }: WelcomeProps) {
                   className="w-full flex items-center justify-center gap-3 bg-[#4A6B4E] hover:bg-[#4A6B4E]/95 text-white font-semibold text-sm py-3.5 px-6 rounded-eclosion shadow-md transition-all active:scale-[0.98]"
                 >
                   <User size={18} />
-                  Créer un compte personnalisé
-                </button>
-
-                <button
-                  onClick={handleGoogle}
-                  disabled={loading !== null}
-                  className="w-full flex items-center justify-center gap-3 bg-white/15 hover:bg-white/20 text-white font-medium text-sm py-3 px-6 rounded-eclosion transition-all active:scale-[0.98]"
-                >
-                  {loading === "google" ? (
-                    <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                  ) : (
-                    <>
-                      <LogIn size={16} />
-                      Continuer avec Google
-                    </>
-                  )}
+                  Créer un compte ou me connecter
                 </button>
 
                 <button
@@ -153,8 +126,8 @@ export default function Welcome({ onLogin, onLoginDemo }: WelcomeProps) {
                   <ArrowLeft size={18} />
                 </button>
                 <div>
-                  <h3 className="text-sm font-bold text-text-main">Créer votre compte de testeuse</h3>
-                  <p className="text-[10px] text-text-ter">Rejoignez la bêta Éclosion d'Afrique Centrale</p>
+                  <h3 className="text-sm font-bold text-text-main">Créer votre compte ou vous connecter</h3>
+                  <p className="text-[10px] text-text-ter">Si vous avez déjà un compte, entrez le même identifiant et mot de passe</p>
                 </div>
               </div>
 
@@ -179,6 +152,22 @@ export default function Welcome({ onLogin, onLoginDemo }: WelcomeProps) {
                     value={regForm.email}
                     onChange={(e) => setRegForm({ ...regForm, email: e.target.value })}
                     placeholder="Ex: mireille@gmail.com ou mireille1"
+                    className="w-full px-3 py-2 bg-surface-sec border border-surface-ter text-xs text-text-main rounded-eclosion focus:outline-none focus:border-brand-primary transition-all h-10"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-xs font-semibold text-text-sec block mb-1 flex items-center gap-1">
+                    <KeyRound size={12} className="text-brand-primary" />
+                    Mot de passe (4 caractères minimum)
+                  </label>
+                  <input
+                    type="password"
+                    required
+                    minLength={4}
+                    value={regForm.password}
+                    onChange={(e) => setRegForm({ ...regForm, password: e.target.value })}
+                    placeholder="Choisissez un mot de passe simple à retenir"
                     className="w-full px-3 py-2 bg-surface-sec border border-surface-ter text-xs text-text-main rounded-eclosion focus:outline-none focus:border-brand-primary transition-all h-10"
                   />
                 </div>

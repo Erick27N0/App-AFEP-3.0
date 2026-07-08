@@ -6,3 +6,7 @@ coverage/
 *.log
 .env*
 !.env.example
+db_state.json
+repomix-output.xml
+eclosion.db
+eclosion.db-*

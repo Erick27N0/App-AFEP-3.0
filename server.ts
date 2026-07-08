@@ -1,6 +1,7 @@
 import express from "express";
 import path from "path";
-import fs from "fs";
+import crypto from "crypto";
+import Database from "better-sqlite3";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 import dotenv from "dotenv";
@@ -9,125 +10,216 @@ import { SEED_DONORS } from "./src/donors_data";
 dotenv.config();
 
 const app = express();
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
 
 app.use(express.json());
 
-// Persistent JSON Database path
-const DB_FILE = path.join(process.cwd(), "db_state.json");
+// ---------------- SQLite Database ----------------
+// DATA_DIR permet de monter un disque persistant (ex: /data sur Render payant).
+const DATA_DIR = process.env.DATA_DIR || process.cwd();
+const db = new Database(path.join(DATA_DIR, "eclosion.db"));
+db.pragma("journal_mode = WAL");
 
-interface DbState {
-  users: any[];
-  groups: any[];
-  groupMessages: any[];
-  donorRatings: any[];
-  fundingRequests: any[];
-  testerFeedbacks: any[];
+db.exec(`
+  CREATE TABLE IF NOT EXISTS users (
+    user_id TEXT PRIMARY KEY,
+    email TEXT UNIQUE NOT NULL,
+    name TEXT NOT NULL,
+    picture TEXT NOT NULL DEFAULT '',
+    group_id TEXT,
+    password_hash TEXT,
+    password_salt TEXT,
+    created_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS sessions (
+    token TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS groups (
+    group_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    location TEXT NOT NULL DEFAULT '',
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS group_members (
+    group_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    PRIMARY KEY (group_id, user_id)
+  );
+  CREATE TABLE IF NOT EXISTS group_messages (
+    message_id TEXT PRIMARY KEY,
+    group_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    user_name TEXT NOT NULL,
+    content TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS donor_ratings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    donor_id TEXT NOT NULL,
+    user_name TEXT NOT NULL,
+    stars INTEGER NOT NULL,
+    outcome TEXT NOT NULL DEFAULT '',
+    comment TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS funding_requests (
+    request_id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    group_id TEXT,
+    project_name TEXT NOT NULL DEFAULT '',
+    sector TEXT NOT NULL DEFAULT '',
+    problem TEXT NOT NULL DEFAULT '',
+    solution TEXT NOT NULL DEFAULT '',
+    target_amount TEXT NOT NULL DEFAULT '',
+    beneficiaries TEXT NOT NULL DEFAULT '',
+    pitch TEXT NOT NULL DEFAULT '',
+    ai_generated INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'Soumis',
+    created_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS tester_feedbacks (
+    feedback_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    email TEXT NOT NULL DEFAULT '',
+    rating INTEGER NOT NULL DEFAULT 5,
+    comment TEXT NOT NULL DEFAULT '',
+    role TEXT NOT NULL DEFAULT 'Bêta-testeuse',
+    created_at TEXT NOT NULL
+  );
+`);
+
+// ---------------- Helpers ----------------
+const now = () => new Date().toISOString();
+const genId = (prefix: string) => prefix + "_" + crypto.randomBytes(6).toString("hex");
+
+function hashPassword(password: string, salt: string): string {
+  return crypto.scryptSync(password, salt, 64).toString("hex");
 }
 
-const DEFAULT_DB: DbState = {
-  users: [
-    {
-      user_id: "user_demo_1",
-      email: "demo@eclosion.local",
-      name: "Mireille Démo",
-      picture: "",
-      group_id: "grp_demo_1"
-    }
-  ],
-  groups: [
-    {
-      group_id: "grp_demo_1",
-      name: "Coopérative des Femmes de Bafia",
-      description: "12 femmes courageuses spécialisées dans la production, transformation et ensachage de farine de manioc pure.",
-      location: "Bafia, Cameroun",
-      members: ["user_demo_1"],
-      created_by: "user_demo_1"
-    },
-    {
-      group_id: "grp_demo_2",
-      name: "Association des Artisanes de Pointe-Noire",
-      description: "Atelier collectif de couture, broderie et de teinture de pagnes traditionnels gabonais et congolais.",
-      location: "Pointe-Noire, Congo",
-      members: [],
-      created_by: "system"
-    }
-  ],
-  groupMessages: [
-    {
-      message_id: "msg_1",
-      group_id: "grp_demo_1",
-      user_id: "system",
-      user_name: "Éclosion Assistance",
-      content: "Bienvenue dans le salon de discussion de votre coopérative ! Échangez ici avec vos membres pour planifier vos activités et coordonner la transformation.",
-      created_at: new Date().toISOString()
-    }
-  ],
-  donorRatings: [
-    {
-      donor_id: "d_cm_02",
-      user_name: "Aïcha (Bafia)",
-      stars: 5,
-      outcome: "funded",
-      comment: "Le programme ACEFA a entièrement financé notre presse à manioc mécanique ! L'accompagnement sur le terrain était formidable.",
-      created_at: new Date().toISOString()
-    },
-    {
-      donor_id: "d_cm_02",
-      user_name: "Marie-Louise",
-      stars: 4,
-      outcome: "responded",
-      comment: "Dossier exigeant mais le comité d'évaluation étudie sérieusement chaque proposition rurale.",
-      created_at: new Date().toISOString()
-    }
-  ],
-  fundingRequests: [
-    {
-      request_id: "fund_demo_1",
-      user_id: "user_demo_1",
-      group_id: "grp_demo_1",
-      project_name: "Unité Mobile de Presse de Manioc",
-      sector: "Agriculture",
-      problem: "Le manioc frais commence à pourrir sous 48h s'il n'est pas pressé et séché au village.",
-      solution: "Acheter une presse mobile collective sur roues pour faire le pressage à tour de rôle.",
-      target_amount: "500 000 FCFA",
-      beneficiaries: "15 femmes de la coopérative",
-      pitch: "## Résumé exécutif\nLa Coopérative des Femmes de Bafia sollicite un financement de **500 000 FCFA** pour acquérir une unité de pressage de manioc mobile et partagée.\n\n## Le problème\nLe manioc frais récolté pourrit extrêmement vite si le pressage n'est pas réalisé dans les 48 heures suivant l'arrachage, causant d'importantes pertes financières aux cultivatrices.\n\n## Notre solution\nUne presse mécanique robuste montée sur un châssis mobile qui circulera entre les exploitations des membres pour accélérer le processus de râpage et d'essorage du manioc sur place.\n\n## Bénéficiaires & impact\n15 femmes agricultrices et plus de 60 enfants bénéficieront directement d'une hausse de rendement de 40% sur la transformation de la farine.\n\n## Plan d'utilisation des fonds\n- Acquisition de la presse en acier inoxydable (65%)\n- Châssis mobile et roues renforcées (20%)\n- Formation technique à l'entretien (15%)\n\n## Pourquoi nous soutenir\nUn groupe de femmes actives et soudées ayant 3 ans d'expérience dans la culture maraîchère.",
-      ai_generated: true,
-      status: "draft",
-      created_at: new Date().toISOString()
-    }
-  ],
-  testerFeedbacks: []
-};
+function verifyPassword(password: string, salt: string, expectedHash: string): boolean {
+  const actual = Buffer.from(hashPassword(password, salt), "hex");
+  const expected = Buffer.from(expectedHash, "hex");
+  return actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
+}
 
-function readDb(): DbState {
-  try {
-    if (fs.existsSync(DB_FILE)) {
-      const raw = fs.readFileSync(DB_FILE, "utf-8");
-      return JSON.parse(raw);
-    }
-  } catch (err) {
-    console.error("Error reading db_state.json, fallback to in-memory template:", err);
+// Forme publique d'un utilisateur : jamais de hash/salt vers le client.
+function toPublicUser(row: any) {
+  return {
+    user_id: row.user_id,
+    email: row.email,
+    name: row.name,
+    picture: row.picture,
+    group_id: row.group_id
+  };
+}
+
+function normalizeEmail(raw: string): string {
+  const email = String(raw || "").trim().toLowerCase();
+  return email.includes("@") ? email : `${email}@eclosion.local`;
+}
+
+function createSession(userId: string): string {
+  const token = crypto.randomBytes(32).toString("hex");
+  db.prepare("INSERT INTO sessions (token, user_id, created_at) VALUES (?, ?, ?)").run(token, userId, now());
+  return token;
+}
+
+function groupWithMembers(groupRow: any) {
+  if (!groupRow) return null;
+  const members = db
+    .prepare("SELECT user_id FROM group_members WHERE group_id = ?")
+    .all(groupRow.group_id)
+    .map((r: any) => r.user_id);
+  return { ...groupRow, members };
+}
+
+// ---------------- Seed initial data (première exécution uniquement) ----------------
+function seedIfEmpty() {
+  const count = (db.prepare("SELECT COUNT(*) AS c FROM users").get() as any).c;
+  if (count > 0) return;
+
+  const t = now();
+  const demoSalt = crypto.randomBytes(16).toString("hex");
+  db.prepare(
+    "INSERT INTO users (user_id, email, name, picture, group_id, password_hash, password_salt, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+  ).run("user_demo_1", "demo@eclosion.local", "Mireille Démo", "", "grp_demo_1", hashPassword("eclosion-demo", demoSalt), demoSalt, t);
+
+  const insertGroup = db.prepare(
+    "INSERT INTO groups (group_id, name, description, location, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)"
+  );
+  insertGroup.run(
+    "grp_demo_1",
+    "Coopérative des Femmes de Bafia",
+    "12 femmes courageuses spécialisées dans la production, transformation et ensachage de farine de manioc pure.",
+    "Bafia, Cameroun",
+    "user_demo_1",
+    t
+  );
+  insertGroup.run(
+    "grp_demo_2",
+    "Association des Artisanes de Pointe-Noire",
+    "Atelier collectif de couture, broderie et de teinture de pagnes traditionnels gabonais et congolais.",
+    "Pointe-Noire, Congo",
+    "system",
+    t
+  );
+  db.prepare("INSERT INTO group_members (group_id, user_id) VALUES (?, ?)").run("grp_demo_1", "user_demo_1");
+
+  db.prepare(
+    "INSERT INTO group_messages (message_id, group_id, user_id, user_name, content, created_at) VALUES (?, ?, ?, ?, ?, ?)"
+  ).run(
+    "msg_1",
+    "grp_demo_1",
+    "system",
+    "Éclosion Assistance",
+    "Bienvenue dans le salon de discussion de votre coopérative ! Échangez ici avec vos membres pour planifier vos activités et coordonner la transformation.",
+    t
+  );
+
+  const insertRating = db.prepare(
+    "INSERT INTO donor_ratings (donor_id, user_name, stars, outcome, comment, created_at) VALUES (?, ?, ?, ?, ?, ?)"
+  );
+  insertRating.run(
+    "d_cm_02",
+    "Aïcha (Bafia)",
+    5,
+    "funded",
+    "Le programme ACEFA a entièrement financé notre presse à manioc mécanique ! L'accompagnement sur le terrain était formidable.",
+    t
+  );
+  insertRating.run(
+    "d_cm_02",
+    "Marie-Louise",
+    4,
+    "responded",
+    "Dossier exigeant mais le comité d'évaluation étudie sérieusement chaque proposition rurale.",
+    t
+  );
+}
+seedIfEmpty();
+
+// ---------------- Authentication middleware ----------------
+function requireAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const authHeader = req.headers.authorization || "";
+  const token = authHeader.replace("Bearer ", "").trim();
+  if (!token) {
+    return res.status(401).json({ error: "Non authentifiée. Veuillez vous connecter." });
   }
-  return DEFAULT_DB;
-}
-
-function writeDb(data: DbState) {
-  try {
-    fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2), "utf-8");
-  } catch (err) {
-    console.error("Error writing db_state.json:", err);
+  const userRow = db
+    .prepare("SELECT u.* FROM sessions s JOIN users u ON u.user_id = s.user_id WHERE s.token = ?")
+    .get(token);
+  if (!userRow) {
+    return res.status(401).json({ error: "Session expirée. Veuillez vous reconnecter." });
   }
-}
-
-// Initialize database file
-if (!fs.existsSync(DB_FILE)) {
-  writeDb(DEFAULT_DB);
+  (req as any).user = userRow;
+  next();
 }
 
 // ---------------- Initialize Gemini Client ----------------
-// We use lazy initialization and fail-safe fallbacks if key is missing or invalid.
 let aiClient: GoogleGenAI | null = null;
 function getGemini(): GoogleGenAI | null {
   if (!aiClient) {
@@ -157,192 +249,202 @@ app.get("/api/config", (req, res) => {
   res.json({ demo_mode: true });
 });
 
-// User Session Simulation
+// Inscription OU connexion : si l'email existe, le mot de passe doit correspondre ;
+// sinon le compte est créé avec ce mot de passe.
 app.post("/api/auth/session", (req, res) => {
-  const { session_token, email, name } = req.body;
-  const dbState = readDb();
-  
-  let existingUser = dbState.users.find(u => u.email === email);
-  if (!existingUser) {
-    existingUser = {
-      user_id: "user_" + Math.random().toString(36).substring(2, 10),
-      email: email || "user@eclosion.local",
-      name: name || "Utilisatrice Éclosion",
+  const { name, email, password } = req.body || {};
+  const cleanEmail = normalizeEmail(email);
+  const cleanName = String(name || "").trim();
+  const cleanPassword = String(password || "");
+
+  if (!cleanEmail || cleanEmail === "@eclosion.local") {
+    return res.status(400).json({ error: "Veuillez saisir votre email ou identifiant." });
+  }
+  if (cleanPassword.length < 4) {
+    return res.status(400).json({ error: "Le mot de passe doit contenir au moins 4 caractères." });
+  }
+
+  let userRow: any = db.prepare("SELECT * FROM users WHERE email = ?").get(cleanEmail);
+
+  if (userRow) {
+    // Compte existant : vérification du mot de passe
+    if (!userRow.password_hash || !verifyPassword(cleanPassword, userRow.password_salt, userRow.password_hash)) {
+      return res.status(401).json({ error: "Mot de passe incorrect pour ce compte. Réessayez ou utilisez un autre identifiant." });
+    }
+  } else {
+    // Nouveau compte
+    if (!cleanName) {
+      return res.status(400).json({ error: "Veuillez saisir votre nom complet." });
+    }
+    const salt = crypto.randomBytes(16).toString("hex");
+    userRow = {
+      user_id: genId("user"),
+      email: cleanEmail,
+      name: cleanName,
       picture: "",
-      group_id: null
+      group_id: null,
+      password_hash: hashPassword(cleanPassword, salt),
+      password_salt: salt,
+      created_at: now()
     };
-    dbState.users.push(existingUser);
-    writeDb(dbState);
+    db.prepare(
+      "INSERT INTO users (user_id, email, name, picture, group_id, password_hash, password_salt, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+    ).run(userRow.user_id, userRow.email, userRow.name, userRow.picture, userRow.group_id, userRow.password_hash, userRow.password_salt, userRow.created_at);
   }
-  
-  res.json({ session_token: session_token || "session_" + Math.random().toString(36).substring(2, 12), user: existingUser });
+
+  const token = createSession(userRow.user_id);
+  res.json({ session_token: token, user: toPublicUser(userRow) });
 });
 
-// Get Current User Profile
-app.get("/api/auth/me", (req, res) => {
-  const authHeader = req.headers.authorization || "";
-  const token = authHeader.replace("Bearer ", "");
-  
-  if (!token) {
-    return res.status(401).json({ error: "Non authentifié" });
-  }
-  
-  const dbState = readDb();
-  // Simply mock successful authentication or fetch user by ID/token if needed
-  // In demo mode we match default demo user or latest registered
-  const user = dbState.users[dbState.users.length - 1] || DEFAULT_DB.users[0];
-  res.json(user);
+// Profil de l'utilisatrice connectée (déduit du jeton, jamais des paramètres)
+app.get("/api/auth/me", requireAuth, (req, res) => {
+  res.json(toPublicUser((req as any).user));
 });
 
-// Demo Login Shortcut
+// Déconnexion : invalide la session côté serveur
+app.post("/api/auth/logout", requireAuth, (req, res) => {
+  const token = (req.headers.authorization || "").replace("Bearer ", "").trim();
+  db.prepare("DELETE FROM sessions WHERE token = ?").run(token);
+  res.json({ success: true });
+});
+
+// Accès rapide au compte d'évaluation partagé
 app.post("/api/auth/demo-login", (req, res) => {
-  const dbState = readDb();
-  const demoUser = dbState.users.find(u => u.email === "demo@eclosion.local") || DEFAULT_DB.users[0];
-  res.json({
-    session_token: "demo_token_" + Math.random().toString(36).substring(2, 10),
-    user: demoUser
-  });
+  const demoUser: any = db.prepare("SELECT * FROM users WHERE email = ?").get("demo@eclosion.local");
+  if (!demoUser) {
+    return res.status(500).json({ error: "Compte de démonstration introuvable." });
+  }
+  const token = createSession(demoUser.user_id);
+  res.json({ session_token: token, user: toPublicUser(demoUser) });
 });
 
 // Group creation
-app.post("/api/groups", (req, res) => {
-  const { name, description, location, userId } = req.body;
-  const dbState = readDb();
-  
-  const group_id = "grp_" + Math.random().toString(36).substring(2, 10);
-  const newGroup = {
-    group_id,
-    name,
-    description,
-    location,
-    members: [userId || "user_demo_1"],
-    created_by: userId || "user_demo_1"
-  };
-  
-  dbState.groups.push(newGroup);
-  
-  // Update user's group association
-  const user = dbState.users.find(u => u.user_id === (userId || "user_demo_1"));
-  if (user) {
-    user.group_id = group_id;
+app.post("/api/groups", requireAuth, (req, res) => {
+  const user = (req as any).user;
+  const { name, description, location } = req.body || {};
+  if (!name || !String(name).trim()) {
+    return res.status(400).json({ error: "Le nom de la coopérative est obligatoire." });
   }
-  
-  writeDb(dbState);
-  res.json(newGroup);
+
+  const group_id = genId("grp");
+  const createdAt = now();
+  db.prepare(
+    "INSERT INTO groups (group_id, name, description, location, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)"
+  ).run(group_id, String(name).trim(), String(description || ""), String(location || ""), user.user_id, createdAt);
+  db.prepare("INSERT INTO group_members (group_id, user_id) VALUES (?, ?)").run(group_id, user.user_id);
+  db.prepare("UPDATE users SET group_id = ? WHERE user_id = ?").run(group_id, user.user_id);
+
+  const group = db.prepare("SELECT * FROM groups WHERE group_id = ?").get(group_id);
+  res.json(groupWithMembers(group));
 });
 
 // List Groups
 app.get("/api/groups", (req, res) => {
-  const dbState = readDb();
-  res.json(dbState.groups);
+  const groups = db.prepare("SELECT * FROM groups ORDER BY created_at ASC").all();
+  res.json(groups.map(groupWithMembers));
 });
 
 // Join group
-app.post("/api/groups/:group_id/join", (req, res) => {
+app.post("/api/groups/:group_id/join", requireAuth, (req, res) => {
+  const user = (req as any).user;
   const { group_id } = req.params;
-  const { userId } = req.body;
-  const dbState = readDb();
-  
-  const group = dbState.groups.find(g => g.group_id === group_id);
+
+  const group = db.prepare("SELECT * FROM groups WHERE group_id = ?").get(group_id);
   if (!group) {
     return res.status(404).json({ error: "Groupe introuvable" });
   }
-  
-  const targetUser = userId || "user_demo_1";
-  if (!group.members.includes(targetUser)) {
-    group.members.push(targetUser);
-  }
-  
-  const user = dbState.users.find(u => u.user_id === targetUser);
-  if (user) {
-    user.group_id = group_id;
-  }
-  
-  writeDb(dbState);
-  res.json(group);
+
+  db.prepare("INSERT OR IGNORE INTO group_members (group_id, user_id) VALUES (?, ?)").run(group_id, user.user_id);
+  db.prepare("UPDATE users SET group_id = ? WHERE user_id = ?").run(group_id, user.user_id);
+
+  res.json(groupWithMembers(group));
 });
 
 // Leave group
-app.post("/api/groups/:group_id/leave", (req, res) => {
+app.post("/api/groups/:group_id/leave", requireAuth, (req, res) => {
+  const user = (req as any).user;
   const { group_id } = req.params;
-  const { userId } = req.body;
-  const dbState = readDb();
-  
-  const group = dbState.groups.find(g => g.group_id === group_id);
-  if (group) {
-    group.members = group.members.filter((m: string) => m !== (userId || "user_demo_1"));
-  }
-  
-  const user = dbState.users.find(u => u.user_id === (userId || "user_demo_1"));
-  if (user) {
-    user.group_id = null;
-  }
-  
-  writeDb(dbState);
+
+  db.prepare("DELETE FROM group_members WHERE group_id = ? AND user_id = ?").run(group_id, user.user_id);
+  db.prepare("UPDATE users SET group_id = NULL WHERE user_id = ?").run(user.user_id);
+
   res.json({ success: true });
 });
 
-// Get User's Group Detailed
-app.get("/api/groups/mine", (req, res) => {
-  const userId = req.query.userId as string || "user_demo_1";
-  const dbState = readDb();
-  
-  const user = dbState.users.find(u => u.user_id === userId);
-  const group_id = user ? user.group_id : "grp_demo_1";
-  
-  if (!group_id) {
+// Get authenticated user's group with member profiles
+app.get("/api/groups/mine", requireAuth, (req, res) => {
+  const user = (req as any).user;
+
+  if (!user.group_id) {
     return res.json({ group: null, members_info: [] });
   }
-  
-  const group = dbState.groups.find(g => g.group_id === group_id);
+
+  const group = db.prepare("SELECT * FROM groups WHERE group_id = ?").get(user.group_id);
   if (!group) {
     return res.json({ group: null, members_info: [] });
   }
-  
-  const members_info = dbState.users.filter(u => group.members.includes(u.user_id));
-  res.json({ group, members_info });
+
+  const members_info = db
+    .prepare(
+      "SELECT u.user_id, u.email, u.name, u.picture, u.group_id FROM group_members gm JOIN users u ON u.user_id = gm.user_id WHERE gm.group_id = ?"
+    )
+    .all(user.group_id);
+
+  res.json({ group: groupWithMembers(group), members_info });
 });
 
-// Group messages list
-app.get("/api/groups/mine/messages", (req, res) => {
-  const group_id = req.query.groupId as string || "grp_demo_1";
-  const dbState = readDb();
-  
-  const filteredMessages = dbState.groupMessages.filter(m => m.group_id === group_id);
-  res.json(filteredMessages);
+// Group messages list (restreint au groupe de l'utilisatrice connectée)
+app.get("/api/groups/mine/messages", requireAuth, (req, res) => {
+  const user = (req as any).user;
+  if (!user.group_id) {
+    return res.json([]);
+  }
+  const messages = db
+    .prepare("SELECT * FROM group_messages WHERE group_id = ? ORDER BY created_at ASC")
+    .all(user.group_id);
+  res.json(messages);
 });
 
 // Create group message
-app.post("/api/groups/mine/messages", (req, res) => {
-  const { group_id, userId, userName, content } = req.body;
-  const dbState = readDb();
-  
+app.post("/api/groups/mine/messages", requireAuth, (req, res) => {
+  const user = (req as any).user;
+  const { content } = req.body || {};
+
+  if (!user.group_id) {
+    return res.status(400).json({ error: "Vous devez d'abord rejoindre une coopérative." });
+  }
+  if (!content || !String(content).trim()) {
+    return res.status(400).json({ error: "Le message est vide." });
+  }
+
   const newMessage = {
-    message_id: "msg_" + Math.random().toString(36).substring(2, 10),
-    group_id: group_id || "grp_demo_1",
-    user_id: userId || "user_demo_1",
-    user_name: userName || "Mireille Démo",
-    content: content,
-    created_at: new Date().toISOString()
+    message_id: genId("msg"),
+    group_id: user.group_id,
+    user_id: user.user_id,
+    user_name: user.name,
+    content: String(content).trim(),
+    created_at: now()
   };
-  
-  dbState.groupMessages.push(newMessage);
-  writeDb(dbState);
-  
+  db.prepare(
+    "INSERT INTO group_messages (message_id, group_id, user_id, user_name, content, created_at) VALUES (?, ?, ?, ?, ?, ?)"
+  ).run(newMessage.message_id, newMessage.group_id, newMessage.user_id, newMessage.user_name, newMessage.content, newMessage.created_at);
+
   res.json(newMessage);
 });
 
 // List all donors with their calculated stats
 app.get("/api/donors", (req, res) => {
-  const dbState = readDb();
+  const stats = db
+    .prepare("SELECT donor_id, COUNT(*) AS rating_count, AVG(stars) AS avg_rating FROM donor_ratings GROUP BY donor_id")
+    .all() as any[];
+  const statsById = new Map(stats.map(s => [s.donor_id, s]));
+
   const enriched = SEED_DONORS.map(d => {
-    const reviews = dbState.donorRatings.filter(r => r.donor_id === d.donor_id);
-    const totalStars = reviews.reduce((sum, r) => sum + r.stars, 0);
-    const avg = reviews.length > 0 ? Number((totalStars / reviews.length).toFixed(1)) : 0;
+    const s = statsById.get(d.donor_id);
     return {
       ...d,
-      avg_rating: avg,
-      rating_count: reviews.length
+      avg_rating: s ? Number(Number(s.avg_rating).toFixed(1)) : 0,
+      rating_count: s ? s.rating_count : 0
     };
   });
   res.json(enriched);
@@ -351,48 +453,55 @@ app.get("/api/donors", (req, res) => {
 // Donors ratings / reviews
 app.get("/api/donors/:donor_id/reviews", (req, res) => {
   const { donor_id } = req.params;
-  const dbState = readDb();
-  
-  const reviews = dbState.donorRatings.filter(r => r.donor_id === donor_id);
+  const reviews = db
+    .prepare("SELECT user_name, stars, outcome, comment, created_at FROM donor_ratings WHERE donor_id = ? ORDER BY created_at DESC")
+    .all(donor_id) as any[];
   const totalStars = reviews.reduce((sum, r) => sum + r.stars, 0);
   const avg = reviews.length > 0 ? Number((totalStars / reviews.length).toFixed(1)) : 0;
-  
+
   res.json({ reviews, avg, count: reviews.length });
 });
 
-// Post review/rate donor
-app.post("/api/donors/:donor_id/rate", (req, res) => {
+// Post review/rate donor (signé du nom de l'utilisatrice connectée)
+app.post("/api/donors/:donor_id/rate", requireAuth, (req, res) => {
+  const user = (req as any).user;
   const { donor_id } = req.params;
-  const { userName, stars, outcome, comment } = req.body;
-  const dbState = readDb();
-  
+  const { stars, outcome, comment } = req.body || {};
+
+  const numStars = Number(stars);
+  if (!Number.isFinite(numStars) || numStars < 1 || numStars > 5) {
+    return res.status(400).json({ error: "La note doit être comprise entre 1 et 5 étoiles." });
+  }
+
   const newRating = {
     donor_id,
-    user_name: userName || "Anonyme",
-    stars: Number(stars),
-    outcome: outcome,
-    comment: comment || "",
-    created_at: new Date().toISOString()
+    user_name: user.name,
+    stars: Math.round(numStars),
+    outcome: String(outcome || ""),
+    comment: String(comment || ""),
+    created_at: now()
   };
-  
-  dbState.donorRatings.push(newRating);
-  writeDb(dbState);
+  db.prepare(
+    "INSERT INTO donor_ratings (donor_id, user_name, stars, outcome, comment, created_at) VALUES (?, ?, ?, ?, ?, ?)"
+  ).run(newRating.donor_id, newRating.user_name, newRating.stars, newRating.outcome, newRating.comment, newRating.created_at);
+
   res.json({ success: true, rating: newRating });
 });
 
 // Get My Funding Requests
-app.get("/api/funding/mine", (req, res) => {
-  const userId = req.query.userId as string || "user_demo_1";
-  const dbState = readDb();
-  
-  const requests = dbState.fundingRequests.filter(r => r.user_id === userId);
-  res.json(requests);
+app.get("/api/funding/mine", requireAuth, (req, res) => {
+  const user = (req as any).user;
+  const requests = db
+    .prepare("SELECT * FROM funding_requests WHERE user_id = ? ORDER BY created_at DESC")
+    .all(user.user_id) as any[];
+  res.json(requests.map(r => ({ ...r, ai_generated: Boolean(r.ai_generated) })));
 });
 
 // Generate pitch via Gemini AI!
-app.post("/api/funding/generate", async (req, res) => {
-  const { project_name, sector, problem, solution, target_amount, beneficiaries, userId } = req.body;
-  
+app.post("/api/funding/generate", requireAuth, async (req, res) => {
+  const user = (req as any).user;
+  const { project_name, sector, problem, solution, target_amount, beneficiaries } = req.body || {};
+
   const prompt = `Rédige un pitch de financement en français pour un projet porté par des femmes rurales d'Afrique Centrale, membres du réseau AFEP-3.0 (Association des Familles pour l'Éducation et le Progrès v3.0).
 Tu dois adopter un style clair, encourageant, réaliste et très professionnel pour convaincre des bailleurs de fonds (ONG, microfinance).
 Mentionne impérativement que ce projet collectif est soutenu et encadré par l'association AFEP-3.0, garantissant le suivi rigoureux et l'éthique de la coopérative.
@@ -427,7 +536,7 @@ RÉDIGE LE PITCH EN UTILISANT EXACTEMENT CES SECTIONS EN MARKDOWN (Titre h2 "## 
 
   let pitchText = "";
   let aiGenerated = false;
-  
+
   const gemini = getGemini();
   if (gemini) {
     try {
@@ -471,56 +580,70 @@ Après concertation avec tous les membres du groupe, nous prévoyons de réparti
 Notre groupe est fondé sur des valeurs de solidarité indéfectibles, de travail partagé et d'ancrage local fort, consolidé par le programme d'intégration d'**AFEP-3.0**. En nous soutenant, vous investissez dans une coopérative pérenne capable de générer de l'impact social concret dès la première semaine.`;
   }
 
-  const dbState = readDb();
-  const request_id = "fund_" + Math.random().toString(36).substring(2, 10);
-  
   const newRequest = {
-    request_id,
-    user_id: userId || "user_demo_1",
-    group_id: dbState.users.find(u => u.user_id === (userId || "user_demo_1"))?.group_id || "grp_demo_1",
-    project_name,
-    sector,
-    problem,
-    solution,
-    target_amount,
-    beneficiaries,
+    request_id: genId("fund"),
+    user_id: user.user_id,
+    group_id: user.group_id || null,
+    project_name: String(project_name || ""),
+    sector: String(sector || ""),
+    problem: String(problem || ""),
+    solution: String(solution || ""),
+    target_amount: String(target_amount || ""),
+    beneficiaries: String(beneficiaries || ""),
     pitch: pitchText,
     ai_generated: aiGenerated,
     status: "Soumis",
-    created_at: new Date().toISOString()
+    created_at: now()
   };
-  
-  dbState.fundingRequests.push(newRequest);
-  writeDb(dbState);
-  
+  db.prepare(
+    "INSERT INTO funding_requests (request_id, user_id, group_id, project_name, sector, problem, solution, target_amount, beneficiaries, pitch, ai_generated, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+  ).run(
+    newRequest.request_id,
+    newRequest.user_id,
+    newRequest.group_id,
+    newRequest.project_name,
+    newRequest.sector,
+    newRequest.problem,
+    newRequest.solution,
+    newRequest.target_amount,
+    newRequest.beneficiaries,
+    newRequest.pitch,
+    aiGenerated ? 1 : 0,
+    newRequest.status,
+    newRequest.created_at
+  );
+
   res.json(newRequest);
 });
 
 // Submit tester feedback
-app.post("/api/tester-feedback", (req, res) => {
-  const { name, email, rating, comment, role } = req.body;
-  const dbState = readDb();
-  
+app.post("/api/tester-feedback", requireAuth, (req, res) => {
+  const { name, email, rating, comment, role } = req.body || {};
+
   const newFeedback = {
-    feedback_id: "feedback_" + Math.random().toString(36).substring(2, 10),
-    name,
-    email,
-    rating: Number(rating),
-    comment,
-    role: role || "Bêta-testeuse",
-    created_at: new Date().toISOString()
+    feedback_id: genId("feedback"),
+    name: String(name || "").trim(),
+    email: String(email || "").trim(),
+    rating: Number(rating) || 5,
+    comment: String(comment || "").trim(),
+    role: String(role || "Bêta-testeuse"),
+    created_at: now()
   };
-  
-  dbState.testerFeedbacks.push(newFeedback);
-  writeDb(dbState);
-  
+  if (!newFeedback.name || !newFeedback.comment) {
+    return res.status(400).json({ error: "Le nom et le commentaire sont obligatoires." });
+  }
+
+  db.prepare(
+    "INSERT INTO tester_feedbacks (feedback_id, name, email, rating, comment, role, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+  ).run(newFeedback.feedback_id, newFeedback.name, newFeedback.email, newFeedback.rating, newFeedback.comment, newFeedback.role, newFeedback.created_at);
+
   res.json({ success: true, feedback: newFeedback });
 });
 
-// List tester feedback (for Admin or special testing widget)
-app.get("/api/tester-feedback", (req, res) => {
-  const dbState = readDb();
-  res.json(dbState.testerFeedbacks);
+// List tester feedback (réservé aux utilisatrices connectées)
+app.get("/api/tester-feedback", requireAuth, (req, res) => {
+  const feedbacks = db.prepare("SELECT * FROM tester_feedbacks ORDER BY created_at DESC").all();
+  res.json(feedbacks);
 });
 
 

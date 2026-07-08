@@ -23,6 +23,7 @@ import { motion, AnimatePresence } from "motion/react";
 // Import Shared Modular Types and Data
 import { User, Group, GroupMessage, FundingRequest, LocalReminder, FavoriteItem } from "./types";
 import { SEED_OPPORTUNITIES, SEED_DONORS, TRAINING_MODULES } from "./data";
+import { apiFetch, getToken, setToken, getCachedUser, setCachedUser } from "./api";
 
 // Import Shared Views
 import Welcome from "./views/Welcome";
@@ -84,18 +85,18 @@ export default function App() {
         setAllGroups(gData);
       }
 
-      // If user session is active, fetch user-specific records
-      if (user) {
+      // If user session is active, fetch user-specific records (identified by session token)
+      if (user && getToken()) {
         // 3. Fetch User's Group
-        const mineRes = await fetch(`/api/groups/mine?userId=${user.user_id}`);
+        const mineRes = await apiFetch("/api/groups/mine");
         if (mineRes.ok) {
           const mData = await mineRes.json();
           setGroup(mData.group);
           setMembers(mData.members_info);
-          
+
           if (mData.group) {
             // 4. Fetch Group Chat Messages
-            const msgRes = await fetch(`/api/groups/mine/messages?groupId=${mData.group.group_id}`);
+            const msgRes = await apiFetch("/api/groups/mine/messages");
             if (msgRes.ok) {
               const msgData = await msgRes.json();
               setMessages(msgData);
@@ -104,7 +105,7 @@ export default function App() {
         }
 
         // 5. Fetch User's Pitches
-        const pitRes = await fetch(`/api/funding/mine?userId=${user.user_id}`);
+        const pitRes = await apiFetch("/api/funding/mine");
         if (pitRes.ok) {
           const pitData = await pitRes.json();
           setPitches(pitData);
@@ -120,6 +121,33 @@ export default function App() {
     const interval = setInterval(fetchAllData, 8000); // Poll chat/group data every 8s
     return () => clearInterval(interval);
   }, [user]);
+
+  // Restore server session on startup (keeps user logged in after refresh)
+  useEffect(() => {
+    const restoreSession = async () => {
+      if (!getToken()) return;
+      try {
+        const res = await apiFetch("/api/auth/me");
+        if (res.ok) {
+          const restoredUser = await res.json();
+          setUser(restoredUser);
+          setCachedUser(restoredUser);
+        } else if (res.status === 401) {
+          // Session invalide ou expirée : nettoyage
+          setToken(null);
+          setCachedUser(null);
+        }
+      } catch (err) {
+        // Serveur injoignable : on garde la session locale pour le mode hors-ligne
+        const cached = getCachedUser<User>();
+        if (cached) {
+          setUser(cached);
+          showToast("Mode hors-ligne : serveur injoignable, données locales chargées.", "info");
+        }
+      }
+    };
+    restoreSession();
+  }, []);
 
   // Read client-side saved courses on startup
   useEffect(() => {
@@ -144,57 +172,51 @@ export default function App() {
     localStorage.setItem("eclosion_completed_ids", JSON.stringify(next));
   };
 
-  // Google Sign In & Custom account trigger
-  const handleLogin = async (name: string, email: string) => {
+  // Account creation / login with password (server verifies credentials)
+  const handleLogin = async (name: string, email: string, password: string): Promise<boolean> => {
     try {
-      const res = await fetch("/api/auth/session", {
+      const res = await apiFetch("/api/auth/session", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, email })
+        body: JSON.stringify({ name, email, password })
       });
+      const body = await res.json().catch(() => ({}));
       if (res.ok) {
-        const body = await res.json();
+        setToken(body.session_token);
+        setCachedUser(body.user);
         setUser(body.user);
         showToast(`Bienvenue sur Éclosion, ${body.user.name} !`, "success");
-      } else {
-        throw new Error("Erreur de session");
+        return true;
       }
+      showToast(body.error || "Connexion refusée. Vérifiez vos identifiants.", "error");
+      return false;
     } catch (err) {
-      // Offline fallback
-      const mockUser: User = {
-        user_id: "user_" + Math.random().toString(36).substring(2, 10),
-        email: email || "test@eclosion.local",
-        name: name || "Utilisatrice Éclosion",
-        picture: "",
-        group_id: null
-      };
-      setUser(mockUser);
-      showToast(`Mode hors-ligne activé. Bienvenue ${name} !`, "info");
+      showToast("Serveur injoignable. Vérifiez votre connexion internet puis réessayez.", "error");
+      return false;
     }
   };
 
   const handleLoginDemo = async () => {
     try {
-      const res = await fetch("/api/auth/demo-login", { method: "POST" });
+      const res = await apiFetch("/api/auth/demo-login", { method: "POST" });
       if (res.ok) {
         const body = await res.json();
+        setToken(body.session_token);
+        setCachedUser(body.user);
         setUser(body.user);
         showToast("Session d'évaluation chargée !", "success");
+      } else {
+        showToast("Le compte d'évaluation est indisponible.", "error");
       }
     } catch (err) {
-      // Offline fallback
-      setUser({
-        user_id: "user_demo_1",
-        email: "evaluation@eclosion.local",
-        name: "Mireille Alogo",
-        picture: "",
-        group_id: "grp_demo_1"
-      });
-      showToast("Mode hors-ligne activé.", "info");
+      showToast("Serveur injoignable. Vérifiez votre connexion internet puis réessayez.", "error");
     }
   };
 
   const handleLogout = () => {
+    // Invalide la session côté serveur (sans bloquer la déconnexion locale)
+    apiFetch("/api/auth/logout", { method: "POST" }).catch(() => {});
+    setToken(null);
+    setCachedUser(null);
     setUser(null);
     setGroup(null);
     setMembers([]);
@@ -289,14 +311,16 @@ export default function App() {
   // Cooperative create / join actions
   const handleCreateGroup = async (name: string, location: string, description: string) => {
     try {
-      const res = await fetch("/api/groups", {
+      const res = await apiFetch("/api/groups", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, description, location, userId: user?.user_id })
+        body: JSON.stringify({ name, description, location })
       });
       if (res.ok) {
         showToast("Coopérative créée avec succès !", "success");
         fetchAllData();
+      } else {
+        const body = await res.json().catch(() => ({}));
+        showToast(body.error || "La création du groupe a échoué.", "error");
       }
     } catch (err) {
       showToast("La création du groupe a échoué. Mode déconnecté.", "error");
@@ -305,10 +329,8 @@ export default function App() {
 
   const handleJoinGroup = async (groupId: string) => {
     try {
-      const res = await fetch(`/api/groups/${groupId}/join`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId: user?.user_id })
+      const res = await apiFetch(`/api/groups/${groupId}/join`, {
+        method: "POST"
       });
       if (res.ok) {
         showToast("Vous avez rejoint la coopérative !", "success");
@@ -321,10 +343,8 @@ export default function App() {
 
   const handleLeaveGroup = async (groupId: string) => {
     try {
-      const res = await fetch(`/api/groups/${groupId}/leave`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId: user?.user_id })
+      const res = await apiFetch(`/api/groups/${groupId}/leave`, {
+        method: "POST"
       });
       if (res.ok) {
         setGroup(null);
@@ -341,19 +361,13 @@ export default function App() {
   const handleSendMessage = async (content: string) => {
     if (!group) return;
     try {
-      const res = await fetch(`/api/groups/mine/messages`, {
+      const res = await apiFetch(`/api/groups/mine/messages`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          group_id: group.group_id,
-          userId: user?.user_id,
-          userName: user?.name,
-          content
-        })
+        body: JSON.stringify({ content })
       });
       if (res.ok) {
         const newMsg = await res.json();
-        setMessages([...messages, newMsg]);
+        setMessages((prev) => [...prev, newMsg]);
       }
     } catch (err) {
       showToast("Le message n'a pas pu être envoyé.", "error");
@@ -363,10 +377,9 @@ export default function App() {
   // AI pitch submission
   const handleGeneratePitch = async (inputs: any) => {
     try {
-      const res = await fetch("/api/funding/generate", {
+      const res = await apiFetch("/api/funding/generate", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...inputs, userId: user?.user_id })
+        body: JSON.stringify(inputs)
       });
       if (res.ok) {
         showToast("Plan d'affaires généré par l'IA !", "success");
@@ -395,18 +408,12 @@ export default function App() {
     }
   };
 
-  // Donor ratings submission
+  // Donor ratings submission (le serveur signe l'avis avec le nom du compte connecté)
   const handleRateDonor = async (donorId: string, stars: number, outcome: string, comment: string) => {
     try {
-      const res = await fetch(`/api/donors/${donorId}/rate`, {
+      const res = await apiFetch(`/api/donors/${donorId}/rate`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          userName: user?.name,
-          stars,
-          outcome,
-          comment
-        })
+        body: JSON.stringify({ stars, outcome, comment })
       });
       if (res.ok) {
         showToast("Votre avis a été enregistré !", "success");

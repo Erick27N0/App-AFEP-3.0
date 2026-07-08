@@ -12,6 +12,7 @@ import {
   Star 
 } from "lucide-react";
 import { TesterFeedback } from "../types";
+import { apiFetch } from "../api";
 
 interface BetaPortalProps {
   onBack: () => void;
@@ -31,7 +32,7 @@ export default function BetaPortal({ onBack }: BetaPortalProps) {
 
   const loadFeedbacks = async () => {
     try {
-      const res = await fetch("/api/tester-feedback");
+      const res = await apiFetch("/api/tester-feedback");
       if (res.ok) {
         const data = await res.json();
         setFeedbacks(data);
@@ -50,9 +51,8 @@ export default function BetaPortal({ onBack }: BetaPortalProps) {
     if (!form.name.trim() || !form.comment.trim()) return;
     setLoading(true);
     try {
-      const res = await fetch("/api/tester-feedback", {
+      const res = await apiFetch("/api/tester-feedback", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(form)
       });
       if (res.ok) {

@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { apiFetch } from "../api";
 import { 
   TrendingUp, 
   ArrowLeft, 
@@ -67,7 +68,7 @@ export default function Financement({
       try {
         await onGeneratePitch(data);
         // Set most recent pitch
-        const updatedRes = await fetch(`/api/funding/mine`);
+        const updatedRes = await apiFetch(`/api/funding/mine`);
         if (updatedRes.ok) {
           const items = await updatedRes.json();
           if (items.length > 0) {
