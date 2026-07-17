@@ -1,13 +1,125 @@
 <!doctype html>
-<html lang="en">
+<html lang="fr">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>My Google AI Studio App</title>
+    <meta name="theme-color" content="#F2EFEB" />
+    <meta name="description" content="Éclosion by AFEP — la plateforme d'accompagnement des femmes entrepreneures." />
+    <title>Éclosion by AFEP</title>
+    <style>
+      /* Écran d'attente affiché avant le chargement de l'application.
+         Tout est inline (aucune ressource externe) pour s'afficher même
+         quand le serveur met du temps à répondre. */
+      #splash {
+        position: fixed;
+        inset: 0;
+        z-index: 9999;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 20px;
+        background: #F2EFEB;
+        font-family: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+        color: #1A1D1A;
+        text-align: center;
+        padding: 24px;
+        transition: opacity 0.4s ease;
+      }
+      #splash.splash-hidden {
+        opacity: 0;
+        pointer-events: none;
+      }
+      #splash .splash-icon {
+        width: 72px;
+        height: 72px;
+        border-radius: 50%;
+        background: #E8F0E8;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        animation: splash-pulse 2.2s ease-in-out infinite;
+      }
+      #splash h1 {
+        font-size: 28px;
+        font-weight: 700;
+        color: #2E4231;
+        margin: 0;
+        letter-spacing: -0.5px;
+      }
+      #splash .splash-sub {
+        font-size: 13px;
+        color: #5C665C;
+        margin-top: -14px;
+      }
+      #splash .splash-dots {
+        display: flex;
+        gap: 6px;
+      }
+      #splash .splash-dots span {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #4A6B4E;
+        animation: splash-bounce 1.2s ease-in-out infinite;
+      }
+      #splash .splash-dots span:nth-child(2) { animation-delay: 0.15s; background: #D98A2C; }
+      #splash .splash-dots span:nth-child(3) { animation-delay: 0.3s; }
+      #splash #splash-msg {
+        font-size: 14px;
+        color: #3A403A;
+        max-width: 320px;
+        line-height: 1.5;
+        min-height: 42px;
+        transition: opacity 0.3s ease;
+      }
+      @keyframes splash-pulse {
+        0%, 100% { transform: scale(1); }
+        50% { transform: scale(1.06); }
+      }
+      @keyframes splash-bounce {
+        0%, 100% { transform: translateY(0); opacity: 0.5; }
+        50% { transform: translateY(-6px); opacity: 1; }
+      }
+    </style>
   </head>
   <body>
+    <div id="splash">
+      <div class="splash-icon">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#4A6B4E" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 21V9" />
+          <path d="M12 9C12 5.5 9.5 3 5 3c0 4.5 2.5 7 7 6z" fill="#E8F0E8" />
+          <path d="M12 13c0-3.5 2.5-6 7-6 0 4.5-2.5 7-7 7z" fill="#D98A2C" fill-opacity="0.25" stroke="#D98A2C" />
+        </svg>
+      </div>
+      <h1>Éclosion</h1>
+      <p class="splash-sub">par l'AFEP</p>
+      <div class="splash-dots"><span></span><span></span><span></span></div>
+      <p id="splash-msg">Chargement de l'application…</p>
+    </div>
+    <script>
+      (function () {
+        var messages = [
+          { delay: 6000, text: "Le serveur se réveille, merci de patienter…" },
+          { delay: 20000, text: "Encore un instant : le premier chargement peut prendre jusqu'à une minute. Vos données sont bien en sécurité." },
+          { delay: 45000, text: "C'est presque prêt, merci pour votre patience 🌱" }
+        ];
+        var timers = messages.map(function (m) {
+          return setTimeout(function () {
+            var el = document.getElementById("splash-msg");
+            if (el) el.textContent = m.text;
+          }, m.delay);
+        });
+        window.__hideSplash = function () {
+          timers.forEach(clearTimeout);
+          var splash = document.getElementById("splash");
+          if (!splash) return;
+          splash.classList.add("splash-hidden");
+          setTimeout(function () { splash.remove(); }, 450);
+        };
+      })();
+    </script>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
-

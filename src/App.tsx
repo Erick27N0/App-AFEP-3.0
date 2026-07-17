@@ -122,6 +122,30 @@ export default function App() {
     return () => clearInterval(interval);
   }, [user]);
 
+  // Hide the inline splash screen (index.html) once the server answers.
+  // When the shell comes from the service worker cache while Render is
+  // waking up, the splash stays visible with its reassuring messages.
+  useEffect(() => {
+    let cancelled = false;
+    const startedAt = Date.now();
+    const waitForServer = async () => {
+      while (!cancelled && Date.now() - startedAt < 120000) {
+        try {
+          const res = await fetch("/api/config", { cache: "no-store" });
+          if (res.ok) break;
+        } catch {
+          // Serveur pas encore réveillé ou hors-ligne : on réessaie.
+        }
+        await new Promise((r) => setTimeout(r, 3000));
+      }
+      if (!cancelled) (window as any).__hideSplash?.();
+    };
+    waitForServer();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Restore server session on startup (keeps user logged in after refresh)
   useEffect(() => {
     const restoreSession = async () => {
