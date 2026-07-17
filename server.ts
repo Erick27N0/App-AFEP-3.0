@@ -28,6 +28,18 @@ const db: Client = TURSO_URL
   ? createClient({ url: TURSO_URL, authToken: TURSO_TOKEN, intMode: "number" })
   : createClient({ url: `file:${path.join(process.env.DATA_DIR || process.cwd(), "eclosion.db")}`, intMode: "number" });
 
+if (TURSO_URL) {
+  console.log("[DB] Turso connecté : données persistantes.");
+} else if (process.env.NODE_ENV === "production") {
+  console.error(
+    "[DB] ATTENTION : TURSO_DATABASE_URL absent en production — repli sur un fichier SQLite local. " +
+    "Sur Render (disque éphémère), TOUTES les données seront perdues à chaque redémarrage. " +
+    "Vérifiez le Secret File /etc/secrets/turso.env ou les variables d'environnement."
+  );
+} else {
+  console.log("[DB] Mode développement : fichier SQLite local eclosion.db.");
+}
+
 async function initSchema() {
   await db.executeMultiple(`
     CREATE TABLE IF NOT EXISTS users (
@@ -273,7 +285,9 @@ function getGemini(): GoogleGenAI | null {
 
 // Config
 app.get("/api/config", (req, res) => {
-  res.json({ demo_mode: true });
+  // db_persistent permet de vérifier depuis l'extérieur que la production
+  // est bien branchée sur Turso (sinon les données partent à chaque réveil).
+  res.json({ demo_mode: true, db_persistent: Boolean(TURSO_URL) });
 });
 
 // Inscription OU connexion : si l'email existe, le mot de passe doit correspondre ;
