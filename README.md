@@ -1,20 +1,26 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
-</div>
+# 🌱 Éclosion by AFEP
 
-# Run and deploy your AI Studio app
+**Éclosion** est la plateforme d'autonomisation de l'association **AFEP-3.0**, pensée pour les groupes de femmes rurales d'Afrique Centrale. Elle veut leur permettre de :
 
-This contains everything you need to run your app locally.
+- **Se connecter** : créer ou rejoindre un groupe et échanger via une messagerie de groupe ;
+- **Se former** : suivre des modules de formation consultables hors-ligne (transformation du manioc, savonnerie, couture…) ;
+- **Se financer** : découvrir un annuaire de bailleurs de fonds noté par la communauté et générer des dossiers de financement assistés par IA (Gemini).
 
-View your app in AI Studio: https://ai.studio/apps/c322fa44-8028-4e66-81d8-40b72f6bcb30
+⚠️ L'application est en **version bêta, encore en construction** : elle est actuellement testée par un premier groupe de testeuses et évoluera au fil de leurs retours.
 
-## Run Locally
+🔗 **Bêta en ligne** : https://afep-3-0.onrender.com — compte de démonstration via le bouton « Accès rapide ».
 
-**Prerequisites:**  Node.js
+## Lancer en local
 
+**Prérequis** : Node.js
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+```bash
+npm install
+npm run dev
+```
+
+Renseigner `GEMINI_API_KEY` dans `.env` (voir `.env.example`). Sans identifiants Turso, l'app utilise automatiquement une base SQLite locale (`eclosion.db`).
+
+## Aux origines 💡
+
+Ce projet est né en *vibe coding* sur [Google AI Studio](https://ai.studio/apps/c322fa44-8028-4e66-81d8-40b72f6bcb30), qui a permis de passer d'une idée à un premier prototype en quelques prompts — le point de départ de l'aventure Éclosion.
