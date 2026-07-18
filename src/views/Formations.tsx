@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { 
   BookOpen, 
   CheckCircle, 
@@ -146,40 +146,27 @@ const MODULE_QUIZZES: Record<string, {
   ]
 };
 
-// 2. Audio guide voice-synthesis captions simulation
-const AUDIO_CAPTIONS: Record<string, string[]> = {
-  mod_001: [
-    "Bienvenue dans l'assistant audio Éclosion. Écoutons le Chapitre 1.",
-    "Regardez autour de vous. Quels produits manquent au marché ? Que vos voisines achètent-elles ailleurs ?",
-    "Écoutez les besoins. Posez des questions simples : 'Qu'aimeriez-vous acheter plus facilement ?'",
-    "Évaluez la faisabilité. Ai-je les matières premières ? Combien de personnes sont prêtes à acheter ?",
-    "Félicitations! Écoute terminée. Répondez au quiz maintenant pour obtenir votre attestation !"
-  ],
-  mod_002: [
-    "Démarrage de l'audio-guide. Chapitre 2 : Créer son plan d'affaires.",
-    "Décrivez précisément ce que vous vendez. À qui ? Quel est son avantage unique ?",
-    "Calculez vos coûts de départ : matériel, matières premières et transport.",
-    "Déterminez le prix de vente en ajoutant votre marge conseillée de 30 à 50%.",
-    "Plan de vente : décidez du lieu et des volumes hebdomadaires cibles."
-  ],
-  mod_003: [
-    "Démarrage du guide vocal : Gérer son argent en coopérative.",
-    "Tenez un cahier de comptes quotidien. Notez vos recettes et vos dépenses.",
-    "Mettez de côté 10% de vos ventes pour renouveler vos stocks sans emprunt.",
-    "La tontine du groupe est votre meilleure alliée pour épargner et investir ensemble."
-  ],
-  mod_004: [
-    "Audio-guide : Vendre et communiquer simplement.",
-    "Le bouche-à-oreille est votre meilleure arme. Récompensez vos clientes fidèles.",
-    "Utilisez WhatsApp pour partager de jolies photos nettes de vos confections.",
-    "Un produit propre et bien présenté se vend deux fois plus facilement !"
-  ],
-  mod_005: [
-    "Démarrage du guide vocal : Grandir ensemble en groupe.",
-    "L'union fait la force. Achetez vos matières premières ensemble pour réduire les coûts.",
-    "Entraidez-vous en cas de coup dur et partagez vos réussites et astuces d'affaires."
-  ]
-};
+// 2. Guide vocal (bêta) : synthèse vocale du navigateur (gratuite, sans API),
+// limitée volontairement à la PREMIÈRE leçon de chaque formation.
+const SPEECH_SUPPORTED = typeof window !== "undefined" && "speechSynthesis" in window;
+
+// Découpe le texte de la première leçon en phrases courtes : chaque phrase est
+// prononcée puis affichée en sous-titre, ce qui synchronise voix et texte.
+function buildFirstLessonChunks(m: TrainingModule): string[] {
+  const chunks: string[] = [
+    `Bienvenue dans l'assistant vocal Éclosion. Formation : ${m.title}.`
+  ];
+  const first = m.sections?.[0];
+  if (first) {
+    chunks.push(`Leçon 1 : ${first.title}.`);
+    const sentences = first.content.match(/[^.!?]+[.!?]*/g) || [first.content];
+    chunks.push(...sentences.map((s) => s.trim()).filter(Boolean));
+  } else {
+    chunks.push(m.summary);
+  }
+  chunks.push("Fin de l'extrait vocal de la version bêta. Lisez la suite du cours à l'écran, puis passez le quiz !");
+  return chunks;
+}
 
 export default function Formations({
   user,
@@ -195,10 +182,14 @@ export default function Formations({
   
   const [selectedModule, setSelectedModule] = useState<TrainingModule | null>(null);
 
-  // Audio Guide simulation states
+  // Guide vocal states
   const [audioPlaying, setAudioPlaying] = useState(false);
   const [audioProgress, setAudioProgress] = useState(0);
   const [audioIndex, setAudioIndex] = useState(0);
+  const [audioChunks, setAudioChunks] = useState<string[]>([]);
+  // Miroir de audioPlaying lisible dans les callbacks onend (évite les
+  // fermetures périmées quand on arrête la lecture en cours de phrase).
+  const playingRef = useRef(false);
 
   // Quiz interactive states
   const [quizActive, setQuizActive] = useState(false);
@@ -218,42 +209,67 @@ export default function Formations({
   const progressPercent = modules.length > 0 ? Math.round((completedCount / modules.length) * 100) : 0;
   const allDownloaded = modules.length > 0 && downloadedIds.length >= modules.length;
 
-  // Simulate Audio reader interval
-  useEffect(() => {
-    let timer: NodeJS.Timeout;
-    if (audioPlaying && selectedModule) {
-      const captions = AUDIO_CAPTIONS[selectedModule.module_id] || [
-        "Lecture audio en cours du cours Éclosion.",
-        "Suivez les étapes attentivement."
-      ];
-      timer = setInterval(() => {
-        setAudioProgress((prev) => {
-          if (prev >= 100) {
-            setAudioPlaying(false);
-            return 100;
-          }
-          const nextProg = prev + 5;
-          // Map progress to caption index
-          const nextIdx = Math.min(
-            Math.floor((nextProg / 100) * captions.length),
-            captions.length - 1
-          );
-          setAudioIndex(nextIdx);
-          return nextProg;
-        });
-      }, 1000);
+  const stopAudio = () => {
+    playingRef.current = false;
+    if (SPEECH_SUPPORTED) window.speechSynthesis.cancel();
+    setAudioPlaying(false);
+  };
+
+  // Coupe la voix si on quitte l'écran des formations
+  useEffect(() => stopAudio, []);
+
+  // Prononce les phrases une à une en mettant à jour sous-titre et progression
+  const speakChunk = (chunks: string[], i: number) => {
+    if (!playingRef.current) return;
+    if (i >= chunks.length) {
+      setAudioProgress(100);
+      stopAudio();
+      return;
     }
+    setAudioIndex(i);
+    setAudioProgress(Math.round((i / chunks.length) * 100));
+    const utterance = new SpeechSynthesisUtterance(chunks[i]);
+    utterance.lang = "fr-FR";
+    utterance.rate = 0.95;
+    utterance.onend = () => speakChunk(chunks, i + 1);
+    utterance.onerror = () => stopAudio();
+    window.speechSynthesis.speak(utterance);
+  };
+
+  // Repli sans voix (navigateur sans speechSynthesis) : défilement des sous-titres
+  useEffect(() => {
+    if (SPEECH_SUPPORTED || !audioPlaying || audioChunks.length === 0) return;
+    const timer = setInterval(() => {
+      setAudioIndex((prev) => {
+        const next = prev + 1;
+        if (next >= audioChunks.length) {
+          setAudioProgress(100);
+          setAudioPlaying(false);
+          return prev;
+        }
+        setAudioProgress(Math.round((next / audioChunks.length) * 100));
+        return next;
+      });
+    }, 4000);
     return () => clearInterval(timer);
-  }, [audioPlaying, selectedModule]);
+  }, [audioPlaying, audioChunks]);
 
   // Handle active module audio toggle
   const handleToggleAudio = () => {
     if (audioPlaying) {
-      setAudioPlaying(false);
-    } else {
-      setAudioProgress(0);
-      setAudioIndex(0);
-      setAudioPlaying(true);
+      stopAudio();
+      return;
+    }
+    if (!selectedModule) return;
+    const chunks = buildFirstLessonChunks(selectedModule);
+    setAudioChunks(chunks);
+    setAudioProgress(0);
+    setAudioIndex(0);
+    playingRef.current = true;
+    setAudioPlaying(true);
+    if (SPEECH_SUPPORTED) {
+      window.speechSynthesis.cancel();
+      speakChunk(chunks, 0);
     }
   };
 
@@ -264,7 +280,7 @@ export default function Formations({
     setSelectedOption(null);
     setQuizScore(0);
     setShowQuizResult(false);
-    setAudioPlaying(false); // turn off audio guide
+    stopAudio(); // coupe le guide vocal
   };
 
   // Submit Answer
@@ -324,7 +340,6 @@ export default function Formations({
     const isModDl = isDownloaded(selectedModule.module_id);
     const isModComp = isCompleted(selectedModule.module_id);
     const quizQuestions = MODULE_QUIZZES[selectedModule.module_id] || [];
-    const captions = AUDIO_CAPTIONS[selectedModule.module_id] || ["Audio description"];
 
     return (
       <div className="flex flex-col h-full bg-surface-main select-none relative">
@@ -336,8 +351,8 @@ export default function Formations({
               onClick={() => {
                 setSelectedModule(null);
                 setQuizActive(false);
-                setAudioPlaying(false);
-              }} 
+                stopAudio();
+              }}
               className="p-2 -ml-2 hover:bg-surface-sec rounded-full transition-all"
             >
               <ArrowLeft size={20} className="text-text-main" />
@@ -403,7 +418,7 @@ export default function Formations({
                       </div>
                       <div>
                         <span className="text-xs font-bold text-text-main block">Écouter la leçon (Vocal)</span>
-                        <p className="text-[10px] text-text-ter">Guide audio autonome pour une écoute facile</p>
+                        <p className="text-[10px] text-text-ter">Bêta : lecture vocale de la première leçon uniquement</p>
                       </div>
                     </div>
                     <button
@@ -425,7 +440,7 @@ export default function Formations({
                         <div className="bg-brand-primary h-full transition-all duration-300" style={{ width: `${audioProgress}%` }} />
                       </div>
                       <p className="text-[11px] text-brand-primary italic leading-relaxed font-medium bg-white p-2.5 rounded border border-brand-primary/5 min-h-[46px] flex items-center">
-                        "{captions[audioIndex]}"
+                        "{audioChunks[audioIndex] || "Préparation de la lecture..."}"
                       </p>
                     </div>
                   )}
