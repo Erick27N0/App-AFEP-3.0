@@ -1,0 +1,33 @@
+# Ping anti-veille : empêche Render (offre gratuite) d'endormir l'app après
+# 15 minutes sans trafic, pour éviter la minute de réveil aux testeuses.
+#
+# - Toutes les 10 minutes, de 5h00 à 22h50 UTC (= 6h-23h50 au Cameroun/Congo),
+#   heures d'activité des testeuses. La nuit, l'app peut dormir : cela
+#   économise les heures gratuites Render (limite de 750 h/mois).
+# - Le premier ping du matin réveille l'app avant l'arrivée des testeuses.
+# - Lancement manuel possible depuis l'onglet Actions de GitHub (workflow_dispatch).
+#
+# ⚠️ GitHub désactive les crons si le dépôt reste sans commit pendant 60 jours ;
+# un simple commit (ou une réactivation dans l'onglet Actions) le relance.
+
+name: Ping anti-veille
+
+on:
+  schedule:
+    - cron: "*/10 5-22 * * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping de l'app Éclosion
+        run: |
+          reponse=$(curl -fsS --max-time 120 --retry 2 --retry-delay 15 \
+            https://afep-3-0.onrender.com/api/config)
+          echo "Réponse : $reponse"
+          # Bonus : alerte dans les logs si la persistance Turso a décroché.
+          case "$reponse" in
+            *'"db_persistent":true'*) echo "✅ App éveillée, base Turso connectée." ;;
+            *) echo "⚠️ ATTENTION : db_persistent n'est pas true — vérifier le Secret File sur Render !" && exit 1 ;;
+          esac
