@@ -258,6 +258,24 @@ async function requireAuth(req: express.Request, res: express.Response, next: ex
   next();
 }
 
+// ---------------- Admin middleware ----------------
+// Panel admin séparé du système de comptes utilisatrices (pas de rôle "admin"
+// dans la table users) : protégé par un jeton dédié fixé en variable d'env,
+// comparé en temps constant comme les mots de passe plus haut.
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN || "";
+function requireAdmin(req: express.Request, res: express.Response, next: express.NextFunction) {
+  if (!ADMIN_TOKEN) {
+    return res.status(503).json({ error: "Panel admin non configuré (ADMIN_TOKEN manquant côté serveur)." });
+  }
+  const provided = Buffer.from(String(req.headers["x-admin-token"] || ""));
+  const expected = Buffer.from(ADMIN_TOKEN);
+  const valid = provided.length === expected.length && crypto.timingSafeEqual(provided, expected);
+  if (!valid) {
+    return res.status(401).json({ error: "Jeton admin invalide." });
+  }
+  next();
+}
+
 // ---------------- Initialize Gemini Client ----------------
 let aiClient: GoogleGenAI | null = null;
 function getGemini(): GoogleGenAI | null {
@@ -701,6 +719,116 @@ app.get("/api/tester-feedback", requireAuth, async (req, res) => {
   res.json(result.rows);
 });
 
+// ---------------- Admin Endpoints ----------------
+// Toutes protégées par requireAdmin (jeton ADMIN_TOKEN, header x-admin-token),
+// indépendant du système de sessions utilisatrices.
+
+// Compteurs globaux pour un premier écran de dashboard
+app.get("/api/admin/stats", requireAdmin, async (req, res) => {
+  const [users, groups, funding, feedback] = await Promise.all([
+    db.execute("SELECT COUNT(*) AS c FROM users"),
+    db.execute("SELECT COUNT(*) AS c FROM groups"),
+    db.execute("SELECT COUNT(*) AS c FROM funding_requests"),
+    db.execute("SELECT COUNT(*) AS c FROM tester_feedbacks")
+  ]);
+  res.json({
+    users: Number((users.rows[0] as any).c),
+    groups: Number((groups.rows[0] as any).c),
+    funding_requests: Number((funding.rows[0] as any).c),
+    tester_feedbacks: Number((feedback.rows[0] as any).c)
+  });
+});
+
+// List all users (sans hash/salt de mot de passe), avec le nom de leur groupe
+app.get("/api/admin/users", requireAdmin, async (req, res) => {
+  const result = await db.execute(
+    "SELECT u.user_id, u.email, u.name, u.group_id, g.name AS group_name, u.created_at " +
+    "FROM users u LEFT JOIN groups g ON g.group_id = u.group_id ORDER BY u.created_at DESC"
+  );
+  res.json(result.rows);
+});
+
+// Delete a user account (sessions + rattachement de groupe nettoyés)
+app.delete("/api/admin/users/:user_id", requireAdmin, async (req, res) => {
+  const { user_id } = req.params;
+  const result = await db.batch([
+    { sql: "DELETE FROM users WHERE user_id = ?", args: [user_id] },
+    { sql: "DELETE FROM sessions WHERE user_id = ?", args: [user_id] },
+    { sql: "DELETE FROM group_members WHERE user_id = ?", args: [user_id] }
+  ], "write");
+  if (result[0].rowsAffected === 0) {
+    return res.status(404).json({ error: "Utilisatrice introuvable." });
+  }
+  res.json({ success: true });
+});
+
+// List all groups with their members (nom/email, pas juste les user_id)
+app.get("/api/admin/groups", requireAdmin, async (req, res) => {
+  const result = await db.execute("SELECT * FROM groups ORDER BY created_at DESC");
+  const groups = await Promise.all(result.rows.map(async (g: any) => {
+    const membersResult = await db.execute({
+      sql: "SELECT u.user_id, u.name, u.email FROM group_members gm JOIN users u ON u.user_id = gm.user_id WHERE gm.group_id = ?",
+      args: [g.group_id]
+    });
+    return { ...g, members: membersResult.rows };
+  }));
+  res.json(groups);
+});
+
+// Delete a group (mêmes 4 opérations que scripts/supprimer-groupe.sh)
+app.delete("/api/admin/groups/:group_id", requireAdmin, async (req, res) => {
+  const { group_id } = req.params;
+  const result = await db.batch([
+    { sql: "DELETE FROM groups WHERE group_id = ?", args: [group_id] },
+    { sql: "DELETE FROM group_members WHERE group_id = ?", args: [group_id] },
+    { sql: "DELETE FROM group_messages WHERE group_id = ?", args: [group_id] },
+    { sql: "UPDATE users SET group_id = NULL WHERE group_id = ?", args: [group_id] }
+  ], "write");
+  if (result[0].rowsAffected === 0) {
+    return res.status(404).json({ error: "Groupe introuvable." });
+  }
+  res.json({ success: true });
+});
+
+// List all funding requests (tous groupes/utilisatrices confondus)
+app.get("/api/admin/funding-requests", requireAdmin, async (req, res) => {
+  const result = await db.execute(
+    "SELECT f.*, u.name AS user_name, u.email AS user_email FROM funding_requests f " +
+    "JOIN users u ON u.user_id = f.user_id ORDER BY f.created_at DESC"
+  );
+  res.json(result.rows.map((r: any) => ({ ...r, ai_generated: Boolean(r.ai_generated) })));
+});
+
+// Update a funding request's status (suivi du dossier par l'équipe AFEP-3.0)
+const FUNDING_STATUSES = ["Soumis", "En cours", "Accepté", "Refusé"];
+app.patch("/api/admin/funding-requests/:request_id", requireAdmin, async (req, res) => {
+  const { request_id } = req.params;
+  const { status } = req.body || {};
+  if (!FUNDING_STATUSES.includes(status)) {
+    return res.status(400).json({ error: `Statut invalide. Valeurs autorisées : ${FUNDING_STATUSES.join(", ")}` });
+  }
+  const result = await db.execute({
+    sql: "UPDATE funding_requests SET status = ? WHERE request_id = ?",
+    args: [status, request_id]
+  });
+  if (result.rowsAffected === 0) {
+    return res.status(404).json({ error: "Dossier introuvable." });
+  }
+  res.json({ success: true });
+});
+
+// Delete a tester feedback entry (modération)
+app.delete("/api/admin/tester-feedback/:feedback_id", requireAdmin, async (req, res) => {
+  const { feedback_id } = req.params;
+  const result = await db.execute({
+    sql: "DELETE FROM tester_feedbacks WHERE feedback_id = ?",
+    args: [feedback_id]
+  });
+  if (result.rowsAffected === 0) {
+    return res.status(404).json({ error: "Retour introuvable." });
+  }
+  res.json({ success: true });
+});
 
 // ---------------- Vite Middleware & Ingress ----------------
 
