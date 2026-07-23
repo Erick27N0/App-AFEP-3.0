@@ -143,6 +143,35 @@ const MODULE_QUIZZES: Record<string, {
       ],
       correctIndex: 1
     }
+  ],
+  mod_006: [
+    {
+      question: "Que doit contenir un bon dossier de financement ?",
+      options: [
+        "Uniquement le nom de la demandeuse",
+        "Le problème résolu, la solution, le budget, le nombre de bénéficiaires et un calendrier",
+        "Une liste de vœux sans détails"
+      ],
+      correctIndex: 1
+    },
+    {
+      question: "Quelles sont des sources de financement possibles citées dans la formation ?",
+      options: [
+        "Uniquement les prêts entre amies",
+        "Microfinances locales, ONG, programmes gouvernementaux, banques agricoles",
+        "Seulement les jeux d'argent"
+      ],
+      correctIndex: 1
+    },
+    {
+      question: "Que doit contenir un bon pitch de 2 minutes devant un bailleur ?",
+      options: [
+        "Qui vous êtes, le problème, votre solution, le montant demandé et l'impact",
+        "Un long historique familial sans lien avec le projet",
+        "Uniquement le montant demandé, sans explication"
+      ],
+      correctIndex: 0
+    }
   ]
 };
 
